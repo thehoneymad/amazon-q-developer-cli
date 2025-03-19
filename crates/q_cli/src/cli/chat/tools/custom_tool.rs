@@ -15,8 +15,18 @@ use serde::{
     Deserialize,
     Serialize,
 };
+use crossterm::queue;
+use crossterm::style::{
+    self,
+    Color,
+};
+use eyre::{
+    Result,
+    eyre,
+};
 
 use super::InvokeOutput;
+use super::OutputKind;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum CustomToolConfig {
@@ -98,18 +108,68 @@ pub struct CustomTool {
 
 impl CustomTool {
     pub fn from_config(config: CustomToolConfig) -> Result<Self> {
-        todo!()
+        Ok(Self {
+            client: CustomToolClient::from_config(config)
+                .map_err(|e| eyre!("Failed to create custom tool client: {}", e))?,
+            method: "execute".to_string(), // Default method to execute
+            params: None,
+        })
     }
 
     pub async fn invoke(&self, ctx: &Context, updates: &mut impl Write) -> Result<InvokeOutput> {
-        todo!()
+        queue!(
+            updates,
+            style::Print("Executing custom tool: "),
+            style::SetForegroundColor(Color::Green),
+            style::Print(&self.method),
+            style::ResetColor,
+            style::Print("\n"),
+        )?;
+
+        // Send the request to the custom tool
+        let result = self.client.request(&self.method, self.params.clone()).await?;
+
+        // Return the result as JSON
+        Ok(InvokeOutput {
+            output: OutputKind::Json(result),
+        })
     }
 
     pub fn queue_description(&self, updates: &mut impl Write) -> Result<()> {
-        todo!()
+        queue!(
+            updates,
+            style::Print("Executing custom tool method: "),
+            style::SetForegroundColor(Color::Green),
+            style::Print(&self.method),
+            style::ResetColor,
+        )?;
+
+        if let Some(params) = &self.params {
+            queue!(
+                updates,
+                style::Print(" with params: "),
+                style::SetForegroundColor(Color::Green),
+                style::Print(serde_json::to_string_pretty(params).unwrap_or_else(|_| "[Invalid 
+JSON]".to_string())),
+                style::ResetColor,
+            )?;
+        }
+
+        Ok(())
     }
 
     pub async fn validate(&mut self, ctx: &Context) -> Result<()> {
-        todo!()
+          // Initialize the client if needed
+          match &mut self.client {
+            CustomToolClient::Stdio { client: _, server_capabilities } => {
+                if server_capabilities.is_none() {
+                    // Initialize the client
+                    self.client.init().await?;
+                }
+            }
+        }
+
+        // We could add more validation here like checking if the method exists in server capabilities
+        Ok(())
     }
 }
