@@ -41,6 +41,8 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: cargo-clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ steps.toolchain.outputs.cachekey }}
+      - name: Force regenerate lockfile
+        run: rm -f Cargo.lock && cargo generate-lockfile
       - run: cargo clippy --locked --workspace --color always -- -D warnings
 
   cargo-test:
