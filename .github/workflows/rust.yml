@@ -33,6 +33,14 @@ jobs:
         id: toolchain
         with:
           components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: cargo-clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ steps.toolchain.outputs.cachekey }}
       - run: cargo clippy --locked --workspace --color always -- -D warnings
 
   cargo-test:
