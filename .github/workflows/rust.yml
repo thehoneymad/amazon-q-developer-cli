@@ -41,7 +41,7 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: cargo-clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ steps.toolchain.outputs.cachekey }}
-      - run: cargo clippy --offline --workspace --color always -- -D warnings
+      - run: cargo clippy --locked --workspace --color always -- -D warnings
 
   cargo-test:
     name: Test (${{ matrix.os }})
@@ -77,7 +77,7 @@ jobs:
             target/
           key: cargo-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ steps.toolchain.outputs.cachekey }}
       - name: Generate code coverage
-        run: cargo +nightly llvm-cov --offline --workspace --codecov --output-path lcov.info
+        run: cargo +nightly llvm-cov --locked --workspace --codecov --output-path lcov.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         if: github.event.repository.fork == false
