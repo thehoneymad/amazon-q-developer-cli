@@ -53,6 +53,7 @@ impl McpServerConfig {
     }
 }
 
+#[derive(Default)]
 pub struct ToolManager {
     clients: HashMap<String, Arc<CustomToolClient>>,
 }
