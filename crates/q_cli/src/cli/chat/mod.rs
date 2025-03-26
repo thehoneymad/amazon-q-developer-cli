@@ -274,7 +274,7 @@ impl<W: Write> ChatContext<W> {
         profile: Option<String>,
     ) -> Result<Self> {
         let mcp_server_config = mcp_server_config.unwrap_or_default();
-        let tool_manager = ToolManager::from_configs(mcp_server_config).await;
+        let tool_manager = ToolManager::from_configs(mcp_server_config).await?;
         let ctx_clone = Arc::clone(&ctx);
         let conversation_state = ConversationState::new(ctx_clone, tool_manager.load_tools().await?, profile).await;
         Ok(Self {

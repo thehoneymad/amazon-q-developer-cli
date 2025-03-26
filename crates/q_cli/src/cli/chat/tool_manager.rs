@@ -1,4 +1,9 @@
 use std::collections::HashMap;
+use std::hash::{
+    DefaultHasher,
+    Hash,
+    Hasher,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,6 +22,7 @@ use serde::{
     Deserialize,
     Serialize,
 };
+use tracing::error;
 
 use super::parser::ToolUse;
 use super::tools::Tool;
@@ -32,6 +38,9 @@ use crate::cli::chat::tools::ToolSpec;
 use crate::cli::chat::tools::custom_tool::CustomTool;
 
 const NAMESPACE_DELIMITER: &str = "___";
+// This applies for both mcp server and tool name since in the end the tool name as seen by the
+// model is just {server_name}{NAMESPACE_DELIMITER}{tool_name}
+const VALID_TOOL_NAME: &str = "[a-zA-Z][a-zA-Z0-9_]*";
 
 // This is to mirror claude's config set up
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]
@@ -59,12 +68,17 @@ pub struct ToolManager {
 }
 
 impl ToolManager {
-    pub async fn from_configs(config: McpServerConfig) -> Self {
+    pub async fn from_configs(config: McpServerConfig) -> eyre::Result<Self> {
         let McpServerConfig { mcp_servers } = config;
+        let regex = regex::Regex::new(VALID_TOOL_NAME)?;
+        let mut hasher = DefaultHasher::new();
         let pre_initialized = mcp_servers
             .into_iter()
             .map(|(server_name, server_config)| {
-                let server_name = server_name.to_case(convert_case::Case::Snake);
+                let server_name = {
+                    let snake_case = server_name.to_case(convert_case::Case::Snake);
+                    sanitize_server_name(snake_case, &regex, &mut hasher)
+                };
                 let custom_tool_client = CustomToolClient::from_config(server_name.clone(), server_config);
                 (server_name, custom_tool_client)
             })
@@ -75,22 +89,28 @@ impl ToolManager {
             .collect::<Vec<(String, _)>>()
             .await;
         let mut clients = HashMap::<String, Arc<CustomToolClient>>::new();
-        for (name, init_res) in init_results {
+        for (mut name, init_res) in init_results {
             match init_res {
                 Ok(client) => {
-                    clients.insert(name, Arc::new(client));
+                    let mut client = Arc::new(client);
+                    while let Some(collided_client) = clients.insert(name.clone(), client) {
+                        // to avoid server name collision we are going to circumvent this by
+                        // appending the name with 1
+                        name.push('1');
+                        client = collided_client;
+                    }
                 },
-                Err(_e) => {
-                    // TODO: log this
+                Err(e) => {
+                    error!("Error initializing for mcp client {}: {:?}", name, e);
                 },
             }
         }
-        Self { clients }
+        Ok(Self { clients })
     }
 
     pub async fn load_tools(&self) -> eyre::Result<HashMap<String, ToolSpec>> {
         let mut tool_specs = serde_json::from_str::<HashMap<String, ToolSpec>>(include_str!("tools/tool_index.json"))?;
-        for client in self.clients.values() {
+        for (server_name, client) in &self.clients {
             match client.get_tool_spec().await {
                 Ok((name, specs)) => {
                     // Each mcp server might have multiple tools.
@@ -101,8 +121,8 @@ impl ToolManager {
                         tool_specs.insert(spec.name.clone(), spec);
                     }
                 },
-                Err(_e) => {
-                    // TODO: log this. Perhaps also delete it from the list of tools we have?
+                Err(e) => {
+                    error!("Error obtaining tool spec for {}: {:?}", server_name, e);
                 },
             }
         }
@@ -159,5 +179,18 @@ impl ToolManager {
                 Tool::Custom(custom_tool)
             },
         })
+    }
+}
+
+fn sanitize_server_name(orig: String, regex: &regex::Regex, hasher: &mut impl Hasher) -> String {
+    if regex.is_match(&orig) {
+        return orig;
+    }
+    let sanitized: String = orig.chars().filter(|c| regex.is_match(&c.to_string())).collect();
+    if sanitized.is_empty() {
+        orig.hash(hasher);
+        hasher.finish().to_string()
+    } else {
+        sanitized
     }
 }
