@@ -17,18 +17,11 @@ use aws_smithy_types::{
 use custom_tool::CustomTool;
 use execute_bash::ExecuteBash;
 use eyre::Result;
-use fig_api_client::model::{
-    ToolResult,
-    ToolResultContentBlock,
-    ToolResultStatus,
-};
 use fig_os_shim::Context;
 use fs_read::FsRead;
 use fs_write::FsWrite;
 use serde::Deserialize;
 use use_aws::UseAws;
-
-use super::parser::ToolUse;
 
 pub const MAX_TOOL_RESPONSE_SIZE: usize = 800000;
 
@@ -109,36 +102,6 @@ impl Tool {
             Tool::UseAws(use_aws) => use_aws.validate(ctx).await,
             Tool::Custom(custom_tool) => custom_tool.validate(ctx).await,
         }
-    }
-}
-
-impl TryFrom<ToolUse> for Tool {
-    type Error = ToolResult;
-
-    fn try_from(value: ToolUse) -> std::result::Result<Self, Self::Error> {
-        let map_err = |parse_error| ToolResult {
-            tool_use_id: value.id.clone(),
-            content: vec![ToolResultContentBlock::Text(format!(
-                "Failed to validate tool parameters: {parse_error}. The model has either suggested tool parameters which are incompatible with the existing tools, or has suggested one or more tool that does not exist in the list of known tools."
-            ))],
-            status: ToolResultStatus::Error,
-        };
-
-        Ok(match value.name.as_str() {
-            "fs_read" => Self::FsRead(serde_json::from_value::<FsRead>(value.args).map_err(map_err)?),
-            "fs_write" => Self::FsWrite(serde_json::from_value::<FsWrite>(value.args).map_err(map_err)?),
-            "execute_bash" => Self::ExecuteBash(serde_json::from_value::<ExecuteBash>(value.args).map_err(map_err)?),
-            "use_aws" => Self::UseAws(serde_json::from_value::<UseAws>(value.args).map_err(map_err)?),
-            unknown => {
-                return Err(ToolResult {
-                    tool_use_id: value.id,
-                    content: vec![ToolResultContentBlock::Text(format!(
-                        "The tool, \"{unknown}\" is not supported by the client"
-                    ))],
-                    status: ToolResultStatus::Error,
-                });
-            },
-        })
     }
 }
 

@@ -25,6 +25,7 @@ use crate::transport::{
     TransportError,
 };
 use crate::{
+    Listener as _,
     PaginationSupportedOps,
     PromptsListResult,
     ResourceTemplatesListResult,
@@ -132,8 +133,9 @@ where
         let server_name = self.server_name.clone();
 
         tokio::spawn(async move {
+            let mut listener = transport_ref.get_listener();
             loop {
-                match transport_ref.monitor().await {
+                match listener.recv().await {
                     Ok(msg) => {
                         match msg {
                             JsonRpcMessage::Request(_req) => {},
@@ -177,7 +179,7 @@ where
         };
         let msg = JsonRpcMessage::Request(request);
         time::timeout(Duration::from_secs(self.timeout), self.transport.send(&msg)).await??;
-        let resp = time::timeout(Duration::from_secs(self.timeout), self.transport.listen()).await??;
+        let resp = time::timeout(Duration::from_secs(self.timeout), self.transport.get_listener().recv()).await??;
         let JsonRpcMessage::Response(mut resp) = resp else {
             return Err(ClientError::UnexpectedMsgType);
         };
@@ -234,7 +236,8 @@ where
                     };
                     let msg = JsonRpcMessage::Request(next_request);
                     time::timeout(Duration::from_secs(self.timeout), self.transport.send(&msg)).await??;
-                    let resp = time::timeout(Duration::from_secs(self.timeout), self.transport.listen()).await??;
+                    let resp = time::timeout(Duration::from_secs(self.timeout), self.transport.get_listener().recv())
+                        .await??;
                     let JsonRpcMessage::Response(resp) = resp else {
                         return Err(ClientError::UnexpectedMsgType);
                     };

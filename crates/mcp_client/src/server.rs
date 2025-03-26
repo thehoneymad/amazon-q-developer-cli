@@ -15,6 +15,7 @@ use tokio::io::{
 };
 use tokio::task::JoinHandle;
 
+use crate::Listener as _;
 use crate::client::StdioTransport;
 use crate::error::ErrorCode;
 use crate::transport::base_protocol::{
@@ -144,8 +145,9 @@ where
         let handler = Arc::new(self.handler.take().ok_or(ServerError::MissingHandler)?);
         let has_initialized = Arc::new(AtomicBool::new(false));
         let listener = tokio::spawn(async move {
+            let mut listener = transport.get_listener();
             loop {
-                let request = transport.monitor().await;
+                let request = listener.recv().await;
                 let transport_clone = transport.clone();
                 let has_init_clone = has_initialized.clone();
                 let handler_clone = handler.clone();
