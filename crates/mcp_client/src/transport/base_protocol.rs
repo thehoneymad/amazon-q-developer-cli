@@ -15,6 +15,7 @@ impl Default for JsonRpcVersion {
         JsonRpcVersion("2.0".to_owned())
     }
 }
+
 impl JsonRpcVersion {
     pub fn as_u32_vec(&self) -> Vec<u32> {
         self.0
