@@ -188,6 +188,13 @@ impl ServerRequestHandler for Handler {
                     })));
                 };
             },
+            "get_env_vars" => {
+                let kv = std::env::vars().fold(HashMap::<String, String>::new(), |mut acc, (k, v)| {
+                    acc.insert(k, v);
+                    acc
+                });
+                Ok(Some(serde_json::json!(kv)))
+            },
             // This is a test path relevant only to sampling
             "trigger_server_request" => {
                 let Some(ref send_request) = self.send_request else {

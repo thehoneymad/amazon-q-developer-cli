@@ -47,8 +47,7 @@ pub enum CustomToolClient {
 impl CustomToolClient {
     // TODO: add support for http transport
     pub async fn from_config(server_name: String, config: CustomToolConfig) -> Result<Self> {
-        // TODO: accommodate for envs specified
-        let CustomToolConfig { command, args, env: _ } = config;
+        let CustomToolConfig { command, args, env } = config;
         let mcp_client_config = McpClientConfig {
             server_name: server_name.clone(),
             bin_path: command.clone(),
@@ -62,6 +61,7 @@ impl CustomToolClient {
                    "version": "1.0.0"
                  }
             }),
+            env,
         };
         let client = McpClient::<JsonRpcStdioTransport>::from_config(mcp_client_config)?;
         let server_capabilities = Some(client.init().await?);

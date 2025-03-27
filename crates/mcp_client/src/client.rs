@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{
@@ -44,6 +45,7 @@ pub struct ClientConfig {
     pub args: Vec<String>,
     pub timeout: u64,
     pub init_params: serde_json::Value,
+    pub env: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Error)]
@@ -86,13 +88,22 @@ impl Client<StdioTransport> {
             args,
             timeout,
             init_params,
+            env,
         } = config;
-        let child = tokio::process::Command::new(bin_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .args(args)
-            .spawn()?;
+        let child = {
+            let mut command = tokio::process::Command::new(bin_path);
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .envs(std::env::vars());
+            if let Some(env) = env {
+                for (env_name, env_value) in env {
+                    command.env(env_name, env_value);
+                }
+            }
+            command.args(args).spawn()?
+        };
         let server_process_id = child.id().ok_or(ClientError::MissingProcessId)?;
         #[allow(clippy::map_err_ignore)]
         let server_process_id = Pid::from_raw(
@@ -368,6 +379,12 @@ mod tests {
             args: ["1".to_owned()].to_vec(),
             timeout: 60,
             init_params: init_params_one.clone(),
+            env: {
+                let mut map = HashMap::<String, String>::new();
+                map.insert("ENV_ONE".to_owned(), "1".to_owned());
+                map.insert("ENV_TWO".to_owned(), "2".to_owned());
+                Some(map)
+            },
         };
         let init_params_two = serde_json::json!({
             "protocolVersion": "2024-11-05",
@@ -388,6 +405,12 @@ mod tests {
             args: ["2".to_owned()].to_vec(),
             timeout: 60,
             init_params: init_params_two.clone(),
+            env: {
+                let mut map = HashMap::<String, String>::new();
+                map.insert("ENV_ONE".to_owned(), "1".to_owned());
+                map.insert("ENV_TWO".to_owned(), "2".to_owned());
+                Some(map)
+            },
         };
         let mut client_one = Client::<StdioTransport>::from_config(client_config_one).expect("Failed to create client");
         let mut client_two = Client::<StdioTransport>::from_config(client_config_two).expect("Failed to create client");
@@ -458,6 +481,21 @@ mod tests {
                 .expect("Failed to retrieve tool specs from result received"),
             &mock_tool_specs_for_verify
         ));
+        let env_vars = client.request("get_env_vars", None).await.expect("Get env vars failed");
+        let env_one = env_vars
+            .get("result")
+            .expect("Failed to retrieve results from env var request")
+            .get("ENV_ONE")
+            .expect("Failed to retrieve env one from env var request");
+        let env_two = env_vars
+            .get("result")
+            .expect("Failed to retrieve results from env var request")
+            .get("ENV_TWO")
+            .expect("Failed to retrieve env two from env var request");
+        let env_one_as_str = serde_json::to_string(env_one).expect("Failed to convert env one to string");
+        let env_two_as_str = serde_json::to_string(env_two).expect("Failed to convert env two to string");
+        assert_eq!(env_one_as_str, "\"1\"".to_string());
+        assert_eq!(env_two_as_str, "\"2\"".to_string());
         Ok(())
     }
 
