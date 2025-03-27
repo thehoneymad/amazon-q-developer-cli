@@ -110,8 +110,25 @@ impl ToolManager {
 
     pub async fn load_tools(&self) -> eyre::Result<HashMap<String, ToolSpec>> {
         let mut tool_specs = serde_json::from_str::<HashMap<String, ToolSpec>>(include_str!("tools/tool_index.json"))?;
-        for (server_name, client) in &self.clients {
-            match client.get_tool_spec().await {
+        let load_tool = self
+            .clients
+            .iter()
+            .map(|(server_name, client)| {
+                let client_clone = client.clone();
+                let server_name_clone = server_name.clone();
+                async move { (server_name_clone, client_clone.get_tool_spec().await) }
+            })
+            .collect::<Vec<_>>();
+        let load_tool_results = stream::iter(load_tool)
+            .map(|async_closure| tokio::task::spawn(async_closure))
+            .buffer_unordered(20)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .filter_map(|item| item.ok())
+            .collect::<Vec<(String, _)>>();
+        for (server_name, load_tool_result) in load_tool_results {
+            match load_tool_result {
                 Ok((name, specs)) => {
                     // Each mcp server might have multiple tools.
                     // To avoid naming conflicts we are going to namespace it.
