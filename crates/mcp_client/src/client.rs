@@ -25,6 +25,7 @@ use crate::transport::{
     TransportError,
 };
 use crate::{
+    JsonRpcResponse,
     Listener as _,
     PaginationSupportedOps,
     PromptsListResult,
@@ -179,10 +180,17 @@ where
         };
         let msg = JsonRpcMessage::Request(request);
         time::timeout(Duration::from_secs(self.timeout), self.transport.send(&msg)).await??;
-        let resp = time::timeout(Duration::from_secs(self.timeout), self.transport.get_listener().recv()).await??;
-        let JsonRpcMessage::Response(mut resp) = resp else {
-            return Err(ClientError::UnexpectedMsgType);
-        };
+        let mut listener = self.transport.get_listener();
+        let mut resp = time::timeout(Duration::from_secs(self.timeout), async {
+            // we want to ignore all other messages sent by the server at this point and let the
+            // background loop handle them
+            loop {
+                if let JsonRpcMessage::Response(resp) = listener.recv().await? {
+                    break Ok::<JsonRpcResponse, TransportError>(resp);
+                }
+            }
+        })
+        .await??;
         // Pagination support: https://spec.modelcontextprotocol.io/specification/2024-11-05/server/utilities/pagination/#pagination-model
         let mut next_cursor = resp.result.as_ref().and_then(|v| v.get("nextCursor"));
         if next_cursor.is_some() {
@@ -236,11 +244,16 @@ where
                     };
                     let msg = JsonRpcMessage::Request(next_request);
                     time::timeout(Duration::from_secs(self.timeout), self.transport.send(&msg)).await??;
-                    let resp = time::timeout(Duration::from_secs(self.timeout), self.transport.get_listener().recv())
-                        .await??;
-                    let JsonRpcMessage::Response(resp) = resp else {
-                        return Err(ClientError::UnexpectedMsgType);
-                    };
+                    let resp = time::timeout(Duration::from_secs(self.timeout), async {
+                        // we want to ignore all other messages sent by the server at this point and let the
+                        // background loop handle them
+                        loop {
+                            if let JsonRpcMessage::Response(resp) = listener.recv().await? {
+                                break Ok::<JsonRpcResponse, TransportError>(resp);
+                            }
+                        }
+                    })
+                    .await??;
                     current_resp = resp;
                     next_cursor = current_resp.result.as_ref().and_then(|v| v.get("nextCursor"));
                 }
