@@ -69,10 +69,14 @@ impl McpServerConfig {
                     if global_conf.mcp_servers.insert(server_name.clone(), config).is_some() {
                         queue!(
                             output,
-                            style::Print(format!(
-                                "MCP config conflict for {}. Using workspace version.",
-                                server_name
-                            ))
+                            style::SetForegroundColor(style::Color::Yellow),
+                            style::Print("WARNING: "),
+                            style::ResetColor,
+                            style::Print("MCP config conflict for "),
+                            style::SetForegroundColor(style::Color::Green),
+                            style::Print(server_name),
+                            style::ResetColor,
+                            style::Print(". Using workspace version.\n")
                         )?;
                     }
                 }
