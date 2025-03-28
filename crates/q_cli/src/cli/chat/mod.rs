@@ -174,7 +174,7 @@ pub async fn chat(
     };
 
     let mcp_server_configs = McpServerConfig::load_config(&mut output).await.unwrap_or_else(|e| {
-        tracing::warn!("No mcp server config loaded: {}", e);
+        warn!("No mcp server config loaded: {}", e);
         McpServerConfig::default()
     });
 

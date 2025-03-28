@@ -21,7 +21,7 @@ use serde::{
     Deserialize,
     Serialize,
 };
-use tracing::error;
+use tracing::warn;
 
 use super::{
     InvokeOutput,
@@ -137,7 +137,7 @@ impl CustomTool {
                 })
             },
             Err(e) => {
-                error!("Tool call result deserialization failed: {:?}", e);
+                warn!("Tool call result deserialization failed: {:?}", e);
                 Ok(InvokeOutput {
                     output: super::OutputKind::Json(result.clone()),
                 })
@@ -146,9 +146,21 @@ impl CustomTool {
     }
 
     pub fn queue_description(&self, updates: &mut impl Write) -> Result<()> {
-        queue!(updates, style::Print(format!("Running {}", self.name)),)?;
+        queue!(
+            updates,
+            style::Print("Running "),
+            style::SetForegroundColor(style::Color::Green),
+            style::Print(&self.name),
+            style::ResetColor,
+        )?;
         if let Some(params) = &self.params {
-            queue!(updates, style::Print(format!(" with the param:\n{}", params)),)?;
+            queue!(
+                updates,
+                style::Print(" with the param:\n"),
+                style::SetForegroundColor(style::Color::Yellow),
+                style::Print(serde_json::to_string_pretty(params).unwrap_or_else(|_| format!("{:?}", params))),
+                style::ResetColor,
+            )?;
         }
         queue!(updates, style::Print("\n"),)?;
         Ok(())
