@@ -4,11 +4,15 @@ use std::hash::{
     Hash,
     Hasher,
 };
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use convert_case::Casing;
-use eyre::OptionExt;
+use crossterm::{
+    queue,
+    style,
+};
 use fig_api_client::model::{
     ToolResult,
     ToolResultContentBlock,
@@ -50,15 +54,36 @@ pub struct McpServerConfig {
 }
 
 impl McpServerConfig {
-    pub async fn load_config() -> eyre::Result<Self> {
-        let config_path = fig_settings::settings::get_value("mcp.config")?
-            .ok_or_eyre("No mcp config path specified")?
-            .as_str()
-            .ok_or_eyre("No valid path provided for mcp config")
-            .map(|path| shellexpand::tilde(path))?
-            .parse::<PathBuf>()?;
-        let buf = tokio::fs::read(config_path).await?;
-        Ok(serde_json::from_slice::<Self>(&buf)?)
+    pub async fn load_config(output: &mut impl Write) -> eyre::Result<Self> {
+        let mut cwd = std::env::current_dir()?;
+        cwd.push(".amazonq/mcp.json");
+        let expanded_path = shellexpand::tilde("~/.aws/amazonq/mcp.json");
+        let global_path = PathBuf::from(expanded_path.as_ref());
+        let global_buf = tokio::fs::read(global_path).await.ok();
+        let local_buf = tokio::fs::read(cwd).await.ok();
+        let conf = match (global_buf, local_buf) {
+            (Some(global_buf), Some(local_buf)) => {
+                let mut global_conf = serde_json::from_slice::<Self>(&global_buf)?;
+                let local_conf = serde_json::from_slice::<Self>(&local_buf)?;
+                for (server_name, config) in local_conf.mcp_servers {
+                    if global_conf.mcp_servers.insert(server_name.clone(), config).is_some() {
+                        queue!(
+                            output,
+                            style::Print(format!(
+                                "MCP config conflict for {}. Using workspace version.",
+                                server_name
+                            ))
+                        )?;
+                    }
+                }
+                global_conf
+            },
+            (None, Some(local_buf)) => serde_json::from_slice::<Self>(&local_buf)?,
+            (Some(global_buf), None) => serde_json::from_slice::<Self>(&global_buf)?,
+            _ => Default::default(),
+        };
+        output.flush()?;
+        Ok(conf)
     }
 }
 

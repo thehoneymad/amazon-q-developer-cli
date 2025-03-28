@@ -142,7 +142,7 @@ pub async fn chat(input: Option<String>, accept_all: bool, profile: Option<Strin
     region_check("chat")?;
 
     let ctx = Context::new();
-    let output = std::io::stderr();
+    let mut output = std::io::stderr();
 
     let stdin = std::io::stdin();
     let interactive = stdin.is_terminal();
@@ -160,7 +160,7 @@ pub async fn chat(input: Option<String>, accept_all: bool, profile: Option<Strin
         _ => StreamingClient::new().await?,
     };
 
-    let mcp_server_configs = McpServerConfig::load_config().await.unwrap_or_else(|e| {
+    let mcp_server_configs = McpServerConfig::load_config(&mut output).await.unwrap_or_else(|e| {
         tracing::warn!("No mcp server config loaded: {}", e);
         McpServerConfig::default()
     });
