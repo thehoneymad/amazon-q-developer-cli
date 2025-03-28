@@ -37,6 +37,7 @@ use super::tools::custom_tool::{
 use super::tools::execute_bash::ExecuteBash;
 use super::tools::fs_read::FsRead;
 use super::tools::fs_write::FsWrite;
+use super::tools::gh_issue::GhIssue;
 use super::tools::use_aws::UseAws;
 use crate::cli::chat::tools::ToolSpec;
 use crate::cli::chat::tools::custom_tool::CustomTool;
@@ -189,6 +190,7 @@ impl ToolManager {
             "fs_write" => Tool::FsWrite(serde_json::from_value::<FsWrite>(value.args).map_err(map_err)?),
             "execute_bash" => Tool::ExecuteBash(serde_json::from_value::<ExecuteBash>(value.args).map_err(map_err)?),
             "use_aws" => Tool::UseAws(serde_json::from_value::<UseAws>(value.args).map_err(map_err)?),
+            "report_issue" => Tool::GhIssue(serde_json::from_value::<GhIssue>(value.args).map_err(map_err)?),
             // Note that this name is namespaced with server_name{DELIMITER}tool_name
             name => {
                 let (server_name, tool_name) = name.split_once(NAMESPACE_DELIMITER).ok_or(ToolResult {

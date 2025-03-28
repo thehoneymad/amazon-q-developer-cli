@@ -2,6 +2,7 @@ pub mod custom_tool;
 pub mod execute_bash;
 pub mod fs_read;
 pub mod fs_write;
+pub mod gh_issue;
 pub mod use_aws;
 
 use std::io::Write;
@@ -20,6 +21,7 @@ use eyre::Result;
 use fig_os_shim::Context;
 use fs_read::FsRead;
 use fs_write::FsWrite;
+use gh_issue::GhIssue;
 use serde::Deserialize;
 use use_aws::UseAws;
 
@@ -33,6 +35,7 @@ pub enum Tool {
     ExecuteBash(ExecuteBash),
     UseAws(UseAws),
     Custom(CustomTool),
+    GhIssue(GhIssue),
 }
 
 impl Tool {
@@ -44,6 +47,7 @@ impl Tool {
             Tool::ExecuteBash(_) => "Execute shell command",
             Tool::UseAws(_) => "Use AWS CLI",
             Tool::Custom(custom_tool) => &custom_tool.name,
+            Tool::GhIssue(_) => "Prepare GitHub issue",
         }
         .to_owned()
     }
@@ -56,6 +60,7 @@ impl Tool {
             Tool::ExecuteBash(execute_bash) => return format!("Executing `{}`", execute_bash.command),
             Tool::UseAws(_) => "Using AWS CLI",
             Tool::Custom(custom_tool) => &custom_tool.name,
+            Tool::GhIssue(_) => "Preparing GitHub issue",
         }
         .to_owned()
     }
@@ -68,6 +73,7 @@ impl Tool {
             Tool::ExecuteBash(execute_bash) => execute_bash.requires_acceptance(),
             Tool::UseAws(use_aws) => use_aws.requires_acceptance(),
             Tool::Custom(_) => false,
+            Tool::GhIssue(_) => false,
         }
     }
 
@@ -79,6 +85,7 @@ impl Tool {
             Tool::ExecuteBash(execute_bash) => execute_bash.invoke(updates).await,
             Tool::UseAws(use_aws) => use_aws.invoke(context, updates).await,
             Tool::Custom(custom_tool) => custom_tool.invoke(context, updates).await,
+            Tool::GhIssue(gh_issue) => gh_issue.invoke(updates).await,
         }
     }
 
@@ -90,6 +97,7 @@ impl Tool {
             Tool::ExecuteBash(execute_bash) => execute_bash.queue_description(updates),
             Tool::UseAws(use_aws) => use_aws.queue_description(updates),
             Tool::Custom(custom_tool) => custom_tool.queue_description(updates),
+            Tool::GhIssue(gh_issue) => gh_issue.queue_description(updates),
         }
     }
 
@@ -101,6 +109,7 @@ impl Tool {
             Tool::ExecuteBash(execute_bash) => execute_bash.validate(ctx).await,
             Tool::UseAws(use_aws) => use_aws.validate(ctx).await,
             Tool::Custom(custom_tool) => custom_tool.validate(ctx).await,
+            Tool::GhIssue(gh_issue) => gh_issue.validate(ctx).await,
         }
     }
 }
