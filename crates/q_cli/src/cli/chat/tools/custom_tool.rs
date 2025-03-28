@@ -21,6 +21,7 @@ use serde::{
     Deserialize,
     Serialize,
 };
+use tracing::error;
 
 use super::{
     InvokeOutput,
@@ -122,17 +123,26 @@ impl CustomTool {
         let resp = self.client.request(self.method.as_str(), self.params.clone()).await?;
         let result = resp
             .get("result")
-            .cloned()
             .ok_or(eyre::eyre!("{} invocation failed to produce a result", self.name))?;
-        let mut de_result = serde_json::from_value::<ToolCallResult>(result)?;
-        for content in &mut de_result.content {
-            if let MessageContent::Image { data, .. } = content {
-                *data = format!("Redacted base64 encoded string of an image of size {}", data.len());
-            }
+
+        match serde_json::from_value::<ToolCallResult>(result.clone()) {
+            Ok(mut de_result) => {
+                for content in &mut de_result.content {
+                    if let MessageContent::Image { data, .. } = content {
+                        *data = format!("Redacted base64 encoded string of an image of size {}", data.len());
+                    }
+                }
+                Ok(InvokeOutput {
+                    output: super::OutputKind::Json(serde_json::json!(de_result)),
+                })
+            },
+            Err(e) => {
+                error!("Tool call result deserialization failed: {:?}", e);
+                Ok(InvokeOutput {
+                    output: super::OutputKind::Json(result.clone()),
+                })
+            },
         }
-        Ok(InvokeOutput {
-            output: super::OutputKind::Json(serde_json::json!(de_result)),
-        })
     }
 
     pub fn queue_description(&self, updates: &mut impl Write) -> Result<()> {

@@ -100,7 +100,8 @@ pub struct ToolsListResult {
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallResult {
     pub content: Vec<MessageContent>,
-    pub is_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
 }
 
 /// Content of a message
