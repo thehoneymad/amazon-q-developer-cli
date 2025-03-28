@@ -12,8 +12,10 @@ use mcp_client::{
     Client as McpClient,
     ClientConfig as McpClientConfig,
     JsonRpcStdioTransport,
+    MessageContent,
     ServerCapabilities,
     StdioTransport,
+    ToolCallResult,
 };
 use serde::{
     Deserialize,
@@ -120,9 +122,16 @@ impl CustomTool {
         let resp = self.client.request(self.method.as_str(), self.params.clone()).await?;
         let result = resp
             .get("result")
+            .cloned()
             .ok_or(eyre::eyre!("{} invocation failed to produce a result", self.name))?;
+        let mut de_result = serde_json::from_value::<ToolCallResult>(result)?;
+        for content in &mut de_result.content {
+            if let MessageContent::Image { data, .. } = content {
+                *data = format!("Redacted base64 encoded string of an image of size {}", data.len());
+            }
+        }
         Ok(InvokeOutput {
-            output: super::OutputKind::Json(result.clone()),
+            output: super::OutputKind::Json(serde_json::json!(de_result)),
         })
     }
 

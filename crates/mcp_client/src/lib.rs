@@ -52,34 +52,98 @@ pub enum OpsConversionError {
     InvalidMethod,
 }
 
+/// Result of listing resources operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourcesListResult {
+    /// List of resources
     resources: Vec<serde_json::Value>,
+    /// Optional cursor for pagination
     #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
 }
 
+/// Result of listing resource templates operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceTemplatesListResult {
+    /// List of resource templates
     resource_templates: Vec<serde_json::Value>,
+    /// Optional cursor for pagination
     #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
 }
 
+/// Result of listing prompts operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptsListResult {
+    /// List of prompts
     prompts: Vec<serde_json::Value>,
+    /// Optional cursor for pagination
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+}
+
+/// Result of listing tools operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsListResult {
+    /// List of tools
+    tools: Vec<serde_json::Value>,
+    /// Optional cursor for pagination
     #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolsListResult {
-    tools: Vec<serde_json::Value>,
+pub struct ToolCallResult {
+    pub content: Vec<MessageContent>,
+    pub is_error: bool,
+}
+
+/// Content of a message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum MessageContent {
+    /// Text content
+    Text {
+        /// The text content
+        text: String,
+    },
+    /// Image content
+    #[serde(rename_all = "camelCase")]
+    Image {
+        /// base64-encoded-data
+        data: String,
+        mime_type: String,
+    },
+    /// Resource content
+    Resource {
+        /// The resource
+        resource: Resource,
+    },
+}
+
+/// Resource contents
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ResourceContents {
+    Text { text: String },
+    Blob { data: Vec<u8> },
+}
+
+/// A resource in the system
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resource {
+    /// Unique identifier for the resource
+    pub uri: String,
+    /// Human-readable title
+    pub title: String,
+    /// Optional description
     #[serde(skip_serializing_if = "Option::is_none")]
-    next_cursor: Option<String>,
+    pub description: Option<String>,
+    /// Resource contents
+    pub contents: ResourceContents,
 }
