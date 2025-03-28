@@ -70,8 +70,12 @@ use tool_manager::{
     McpServerConfig,
     ToolManager,
 };
-use tools::Tool;
 use tools::gh_issue::GhIssueContext;
+use tools::{
+    Tool,
+    Tool,
+    ToolSpec,
+};
 use tracing::{
     debug,
     error,
