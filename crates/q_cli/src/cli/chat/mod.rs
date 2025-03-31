@@ -282,7 +282,7 @@ impl<W: Write> ChatContext<W> {
     pub async fn new(
         ctx: Arc<Context>,
         settings: Settings,
-        output: W,
+        mut output: W,
         input: Option<String>,
         input_source: InputSource,
         interactive: bool,
@@ -293,9 +293,10 @@ impl<W: Write> ChatContext<W> {
         profile: Option<String>,
     ) -> Result<Self> {
         let mcp_server_config = mcp_server_config.unwrap_or_default();
-        let tool_manager = ToolManager::from_configs(mcp_server_config).await?;
+        let tool_manager = ToolManager::from_configs(mcp_server_config, &mut output).await?;
         let ctx_clone = Arc::clone(&ctx);
-        let conversation_state = ConversationState::new(ctx_clone, tool_manager.load_tools().await?, profile).await;
+        let conversation_state =
+            ConversationState::new(ctx_clone, tool_manager.load_tools(&mut output).await?, profile).await;
         Ok(Self {
             ctx,
             settings,

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use convert_case::Casing;
 use crossterm::{
+    execute,
     queue,
     style,
 };
@@ -98,7 +99,7 @@ pub struct ToolManager {
 }
 
 impl ToolManager {
-    pub async fn from_configs(config: McpServerConfig) -> eyre::Result<Self> {
+    pub async fn from_configs(config: McpServerConfig, output: &mut impl Write) -> eyre::Result<Self> {
         let McpServerConfig { mcp_servers } = config;
         let regex = regex::Regex::new(VALID_TOOL_NAME)?;
         let mut hasher = DefaultHasher::new();
@@ -131,6 +132,17 @@ impl ToolManager {
                     }
                 },
                 Err(e) => {
+                    execute!(
+                        output,
+                        style::SetForegroundColor(style::Color::Red),
+                        style::Print("Error"),
+                        style::ResetColor,
+                        style::Print(": Init for MCP server "),
+                        style::SetForegroundColor(style::Color::Green),
+                        style::Print(&name),
+                        style::ResetColor,
+                        style::Print(format!(" has failed: {:?}", e))
+                    )?;
                     error!("Error initializing for mcp client {}: {:?}", name, e);
                 },
             }
@@ -138,7 +150,7 @@ impl ToolManager {
         Ok(Self { clients })
     }
 
-    pub async fn load_tools(&self) -> eyre::Result<HashMap<String, ToolSpec>> {
+    pub async fn load_tools(&self, output: &mut impl Write) -> eyre::Result<HashMap<String, ToolSpec>> {
         let mut tool_specs = serde_json::from_str::<HashMap<String, ToolSpec>>(include_str!("tools/tool_index.json"))?;
         let load_tool = self
             .clients
@@ -169,6 +181,17 @@ impl ToolManager {
                     }
                 },
                 Err(e) => {
+                    execute!(
+                        output,
+                        style::SetForegroundColor(style::Color::Red),
+                        style::Print("Error"),
+                        style::ResetColor,
+                        style::Print(": Failed to obtain tool specs for "),
+                        style::SetForegroundColor(style::Color::Green),
+                        style::Print(&server_name),
+                        style::ResetColor,
+                        style::Print(format!(": {:?}", e))
+                    )?;
                     error!("Error obtaining tool spec for {}: {:?}", server_name, e);
                 },
             }
