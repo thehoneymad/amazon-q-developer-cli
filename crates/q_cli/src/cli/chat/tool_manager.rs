@@ -7,12 +7,15 @@ use std::hash::{
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::RecvTimeoutError;
 
 use convert_case::Casing;
 use crossterm::{
+    cursor,
     execute,
     queue,
     style,
+    terminal,
 };
 use fig_api_client::model::{
     ToolResult,
@@ -47,6 +50,7 @@ const NAMESPACE_DELIMITER: &str = "___";
 // This applies for both mcp server and tool name since in the end the tool name as seen by the
 // model is just {server_name}{NAMESPACE_DELIMITER}{tool_name}
 const VALID_TOOL_NAME: &str = "[a-zA-Z][a-zA-Z0-9_]*";
+const SPINNER_CHARS: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 // This is to mirror claude's config set up
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]
@@ -114,11 +118,113 @@ impl ToolManager {
                 (server_name, custom_tool_client)
             })
             .collect::<Vec<(String, _)>>();
+
+        enum LoadingMsg {
+            Add(String),
+            Remove(String),
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel::<LoadingMsg>();
+        // Using a hand roll thread because it's just easier to do this than do deal with Send.
+        let loading_display_task = std::thread::spawn(move || {
+            let stdout = std::io::stdout();
+            let mut output_idx: u16 = 0;
+            let mut stdout_lock = stdout.lock();
+            let mut loading_servers = HashMap::<
+                String,
+                (
+                    // position in the output
+                    u16,
+                    // spinner logo position
+                    usize,
+                    // initialization start time
+                    std::time::Instant,
+                    // is done loading
+                    bool,
+                ),
+            >::new();
+            loop {
+                match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(recv_result) => match recv_result {
+                        LoadingMsg::Add(name) => {
+                            let start_time = std::time::Instant::now();
+                            loading_servers.insert(name.clone(), (output_idx, 0, start_time, false));
+                            output_idx += 1;
+                            execute!(
+                                stdout_lock,
+                                style::Print(SPINNER_CHARS[0]),
+                                style::Print(" Initializing "),
+                                style::SetForegroundColor(style::Color::Blue),
+                                style::Print(format!("{}\n", name)),
+                                style::ResetColor,
+                            )?;
+                        },
+                        LoadingMsg::Remove(name) => {
+                            if let Some((pos, _, start_time, is_done_loading)) = loading_servers.get_mut(&name) {
+                                let distance_to_travel = output_idx - *pos;
+                                let time_taken =
+                                    format!("{:.2}", (std::time::Instant::now() - *start_time).as_secs_f64());
+                                *is_done_loading = true;
+                                execute!(
+                                    stdout_lock,
+                                    cursor::MoveUp(distance_to_travel),
+                                    terminal::Clear(terminal::ClearType::CurrentLine),
+                                    cursor::MoveToColumn(0),
+                                    style::SetForegroundColor(style::Color::Green),
+                                    style::Print("✓ "),
+                                    style::SetForegroundColor(style::Color::Blue),
+                                    style::Print(name),
+                                    style::ResetColor,
+                                    style::Print(" loaded in "),
+                                    style::SetForegroundColor(style::Color::Yellow),
+                                    style::Print(format!("{time_taken} s")),
+                                    style::ResetColor,
+                                    cursor::MoveDown(distance_to_travel)
+                                )?;
+                            }
+                        },
+                    },
+                    Err(RecvTimeoutError::Timeout) => {
+                        for (_, (pos, idx, _, is_done_loading)) in loading_servers.iter_mut() {
+                            if *is_done_loading {
+                                continue;
+                            }
+                            let distance_to_travel = output_idx - *pos;
+                            *idx = (*idx + 1) % 10;
+                            queue!(
+                                stdout_lock,
+                                cursor::MoveUp(distance_to_travel),
+                                cursor::MoveToColumn(0),
+                                style::Print(SPINNER_CHARS[*idx]),
+                                cursor::MoveDown(distance_to_travel)
+                            )?;
+                        }
+                        stdout_lock.flush().unwrap();
+                    },
+                    _ => break,
+                }
+            }
+            Ok::<_, eyre::Report>(())
+        });
+        let tx_clone = tx.clone();
         let init_results = stream::iter(pre_initialized)
-            .map(|(name, uninit_client)| async move { (name, uninit_client.await) })
+            .map(|(name, uninit_client)| {
+                let tx = tx_clone.clone();
+                async move {
+                    let _ = tx.send(LoadingMsg::Add(name.clone()));
+                    let initialized_client = uninit_client.await;
+                    let _ = tx.send(LoadingMsg::Remove(name.clone()));
+                    (name, initialized_client)
+                }
+            })
             .buffer_unordered(10)
             .collect::<Vec<(String, _)>>()
             .await;
+        drop(tx_clone);
+        drop(tx);
+        if loading_display_task.join().is_err() {
+            error!("Loading display task exited unsuccessfully");
+        }
         let mut clients = HashMap::<String, Arc<CustomToolClient>>::new();
         for (mut name, init_res) in init_results {
             match init_res {

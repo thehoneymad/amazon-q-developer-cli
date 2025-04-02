@@ -95,7 +95,7 @@ impl Client<StdioTransport> {
             command
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
+                .stderr(Stdio::piped())
                 .envs(std::env::vars());
             if let Some(env) = env {
                 for (env_name, env_value) in env {
