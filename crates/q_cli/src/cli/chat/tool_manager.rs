@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{
     DefaultHasher,
-    Hash,
     Hasher,
 };
 use std::io::Write;
@@ -30,6 +29,7 @@ use serde::{
     Deserialize,
     Serialize,
 };
+use tokio::sync::Mutex;
 use tracing::error;
 
 use super::parser::ToolUse;
@@ -49,8 +49,34 @@ use crate::cli::chat::tools::custom_tool::CustomTool;
 const NAMESPACE_DELIMITER: &str = "___";
 // This applies for both mcp server and tool name since in the end the tool name as seen by the
 // model is just {server_name}{NAMESPACE_DELIMITER}{tool_name}
-const VALID_TOOL_NAME: &str = "[a-zA-Z][a-zA-Z0-9_]*";
+const VALID_TOOL_NAME: &str = "^[a-zA-Z][a-zA-Z0-9_]*$";
 const SPINNER_CHARS: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// Messages used for communication between the tool initialization thread and the loading
+/// display thread. These messages control the visual loading indicators shown to
+/// the user during tool initialization.
+enum LoadingMsg {
+    /// Indicates a new tool is being initialized and should be added to the loading
+    /// display. The String parameter is the name of the tool being initialized.
+    Add(String),
+    /// Indicates a tool has finished initializing successfully and should be removed from
+    /// the loading display. The String parameter is the name of the tool that
+    /// completed initialization.
+    Done(String),
+    /// Represents an error that occurred during tool initialization.
+    /// Contains the name of the server that failed to initialize and the error message.
+    Error { name: String, msg: eyre::Report },
+}
+
+/// Represents the state of a loading indicator for a tool being initialized.
+///
+/// This struct tracks timing information for each tool's loading status display in the terminal.
+///
+/// # Fields
+/// * `init_time` - When initialization for this tool began, used to calculate load time
+struct StatusLine {
+    init_time: std::time::Instant,
+}
 
 // This is to mirror claude's config set up
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]
@@ -100,131 +126,113 @@ impl McpServerConfig {
 #[derive(Default)]
 pub struct ToolManager {
     clients: HashMap<String, Arc<CustomToolClient>>,
+    loading_display_task: Option<std::thread::JoinHandle<Result<(), eyre::Report>>>,
+    loading_status_sender: Option<std::sync::mpsc::Sender<LoadingMsg>>,
 }
 
 impl ToolManager {
-    pub async fn from_configs(config: McpServerConfig, output: &mut impl Write) -> eyre::Result<Self> {
+    pub async fn from_configs(config: McpServerConfig) -> eyre::Result<Self> {
         let McpServerConfig { mcp_servers } = config;
         let regex = regex::Regex::new(VALID_TOOL_NAME)?;
         let mut hasher = DefaultHasher::new();
         let pre_initialized = mcp_servers
             .into_iter()
             .map(|(server_name, server_config)| {
-                let server_name = {
-                    let snake_case = server_name.to_case(convert_case::Case::Snake);
-                    sanitize_server_name(snake_case, &regex, &mut hasher)
-                };
-                let custom_tool_client = CustomToolClient::from_config(server_name.clone(), server_config);
-                (server_name, custom_tool_client)
+                let snaked_cased_name = server_name.to_case(convert_case::Case::Snake);
+                let sanitized_server_name = sanitize_server_name(snaked_cased_name, &regex, &mut hasher);
+                let custom_tool_client = CustomToolClient::from_config(sanitized_server_name.clone(), server_config);
+                (sanitized_server_name, custom_tool_client)
             })
             .collect::<Vec<(String, _)>>();
 
-        enum LoadingMsg {
-            Add(String),
-            Remove(String),
-        }
-
         let (tx, rx) = std::sync::mpsc::channel::<LoadingMsg>();
-        // Using a hand roll thread because it's just easier to do this than do deal with Send.
+        // Using a hand rolled thread because it's just easier to do this than do deal with the Send
+        // requirements that comes with holding onto the stdout lock.
         let loading_display_task = std::thread::spawn(move || {
             let stdout = std::io::stdout();
-            let mut output_idx: u16 = 0;
             let mut stdout_lock = stdout.lock();
-            let mut loading_servers = HashMap::<
-                String,
-                (
-                    // position in the output
-                    u16,
-                    // spinner logo position
-                    usize,
-                    // initialization start time
-                    std::time::Instant,
-                    // is done loading
-                    bool,
-                ),
-            >::new();
+            let mut loading_servers = HashMap::<String, StatusLine>::new();
+            let mut spinner_logo_idx: usize = 0;
+            let mut complete: usize = 0;
+            let mut failed: usize = 0;
             loop {
                 match rx.recv_timeout(std::time::Duration::from_millis(50)) {
                     Ok(recv_result) => match recv_result {
                         LoadingMsg::Add(name) => {
-                            let start_time = std::time::Instant::now();
-                            loading_servers.insert(name.clone(), (output_idx, 0, start_time, false));
-                            output_idx += 1;
-                            execute!(
-                                stdout_lock,
-                                style::Print(SPINNER_CHARS[0]),
-                                style::Print(" Initializing "),
-                                style::SetForegroundColor(style::Color::Blue),
-                                style::Print(format!("{}\n", name)),
-                                style::ResetColor,
-                            )?;
+                            let init_time = std::time::Instant::now();
+                            let status_line = StatusLine { init_time };
+                            execute!(stdout_lock, cursor::MoveToColumn(0))?;
+                            if !loading_servers.is_empty() {
+                                // TODO: account for terminal width
+                                execute!(stdout_lock, cursor::MoveUp(1))?;
+                            }
+                            loading_servers.insert(name.clone(), status_line);
+                            let total = loading_servers.len();
+                            execute!(stdout_lock, terminal::Clear(terminal::ClearType::CurrentLine))?;
+                            queue_init_message(spinner_logo_idx, complete, failed, total, &mut stdout_lock)?;
+                            stdout_lock.flush()?;
                         },
-                        LoadingMsg::Remove(name) => {
-                            if let Some((pos, _, start_time, is_done_loading)) = loading_servers.get_mut(&name) {
-                                let distance_to_travel = output_idx - *pos;
+                        LoadingMsg::Done(name) => {
+                            if let Some(status_line) = loading_servers.get(&name) {
+                                complete += 1;
                                 let time_taken =
-                                    format!("{:.2}", (std::time::Instant::now() - *start_time).as_secs_f64());
-                                *is_done_loading = true;
+                                    (std::time::Instant::now() - status_line.init_time).as_secs_f64().abs();
+                                let time_taken = format!("{:.2}", time_taken);
                                 execute!(
                                     stdout_lock,
-                                    cursor::MoveUp(distance_to_travel),
-                                    terminal::Clear(terminal::ClearType::CurrentLine),
                                     cursor::MoveToColumn(0),
-                                    style::SetForegroundColor(style::Color::Green),
-                                    style::Print("✓ "),
-                                    style::SetForegroundColor(style::Color::Blue),
-                                    style::Print(name),
-                                    style::ResetColor,
-                                    style::Print(" loaded in "),
-                                    style::SetForegroundColor(style::Color::Yellow),
-                                    style::Print(format!("{time_taken} s")),
-                                    style::ResetColor,
-                                    cursor::MoveDown(distance_to_travel)
+                                    cursor::MoveUp(1),
+                                    terminal::Clear(terminal::ClearType::CurrentLine),
                                 )?;
+                                queue_success_message(&name, &time_taken, &mut stdout_lock)?;
+                                let total = loading_servers.len();
+                                queue_init_message(spinner_logo_idx, complete, failed, total, &mut stdout_lock)?;
+                                stdout_lock.flush()?;
                             }
+                        },
+                        LoadingMsg::Error { name, msg } => {
+                            failed += 1;
+                            execute!(
+                                stdout_lock,
+                                cursor::MoveToColumn(0),
+                                cursor::MoveUp(1),
+                                terminal::Clear(terminal::ClearType::CurrentLine),
+                            )?;
+                            let fail_load_msg = msg.to_string();
+                            let fail_load_msg = eyre::eyre!(fail_load_msg);
+                            queue_failure_message(&name, &fail_load_msg, &mut stdout_lock)?;
+                            let total = loading_servers.len();
+                            queue_init_message(spinner_logo_idx, complete, failed, total, &mut stdout_lock)?;
                         },
                     },
                     Err(RecvTimeoutError::Timeout) => {
-                        for (_, (pos, idx, _, is_done_loading)) in loading_servers.iter_mut() {
-                            if *is_done_loading {
-                                continue;
-                            }
-                            let distance_to_travel = output_idx - *pos;
-                            *idx = (*idx + 1) % 10;
-                            queue!(
-                                stdout_lock,
-                                cursor::MoveUp(distance_to_travel),
-                                cursor::MoveToColumn(0),
-                                style::Print(SPINNER_CHARS[*idx]),
-                                cursor::MoveDown(distance_to_travel)
-                            )?;
-                        }
-                        stdout_lock.flush().unwrap();
+                        spinner_logo_idx = (spinner_logo_idx + 1) % SPINNER_CHARS.len();
+                        execute!(
+                            stdout_lock,
+                            cursor::SavePosition,
+                            cursor::MoveToColumn(0),
+                            cursor::MoveUp(1),
+                            style::Print(SPINNER_CHARS[spinner_logo_idx]),
+                            cursor::RestorePosition
+                        )?;
                     },
                     _ => break,
                 }
             }
             Ok::<_, eyre::Report>(())
         });
-        let tx_clone = tx.clone();
         let init_results = stream::iter(pre_initialized)
             .map(|(name, uninit_client)| {
-                let tx = tx_clone.clone();
+                let tx_clone = tx.clone();
                 async move {
-                    let _ = tx.send(LoadingMsg::Add(name.clone()));
+                    let _ = tx_clone.send(LoadingMsg::Add(name.clone()));
                     let initialized_client = uninit_client.await;
-                    let _ = tx.send(LoadingMsg::Remove(name.clone()));
                     (name, initialized_client)
                 }
             })
             .buffer_unordered(10)
             .collect::<Vec<(String, _)>>()
             .await;
-        drop(tx_clone);
-        drop(tx);
-        if loading_display_task.join().is_err() {
-            error!("Loading display task exited unsuccessfully");
-        }
         let mut clients = HashMap::<String, Arc<CustomToolClient>>::new();
         for (mut name, init_res) in init_results {
             match init_res {
@@ -238,70 +246,112 @@ impl ToolManager {
                     }
                 },
                 Err(e) => {
-                    execute!(
-                        output,
-                        style::SetForegroundColor(style::Color::Red),
-                        style::Print("Error"),
-                        style::ResetColor,
-                        style::Print(": Init for MCP server "),
-                        style::SetForegroundColor(style::Color::Green),
-                        style::Print(&name),
-                        style::ResetColor,
-                        style::Print(format!(" has failed: {:?}", e))
-                    )?;
-                    error!("Error initializing for mcp client {}: {:?}", name, e);
+                    error!("Error initializing mcp client for server {}: {:?}", name, &e);
+                    let _ = tx.send(LoadingMsg::Error {
+                        name: name.clone(),
+                        msg: e,
+                    });
                 },
             }
         }
-        Ok(Self { clients })
+        let loading_display_task = Some(loading_display_task);
+        let loading_status_sender = Some(tx);
+        Ok(Self {
+            clients,
+            loading_display_task,
+            loading_status_sender,
+        })
     }
 
-    pub async fn load_tools(&self, output: &mut impl Write) -> eyre::Result<HashMap<String, ToolSpec>> {
-        let mut tool_specs = serde_json::from_str::<HashMap<String, ToolSpec>>(include_str!("tools/tool_index.json"))?;
+    pub async fn load_tools(&mut self) -> eyre::Result<HashMap<String, ToolSpec>> {
+        let tx = self.loading_status_sender.take();
+        let display_task = self.loading_display_task.take();
+        let tool_specs = {
+            let tool_specs = serde_json::from_str::<HashMap<String, ToolSpec>>(include_str!("tools/tool_index.json"))?;
+            Arc::new(Mutex::new(tool_specs))
+        };
+        let regex = Arc::new(regex::Regex::new(VALID_TOOL_NAME)?);
         let load_tool = self
             .clients
             .iter()
             .map(|(server_name, client)| {
                 let client_clone = client.clone();
                 let server_name_clone = server_name.clone();
-                async move { (server_name_clone, client_clone.get_tool_spec().await) }
+                let tx_clone = tx.clone();
+                let regex_clone = regex.clone();
+                let tool_specs_clone = tool_specs.clone();
+                async move {
+                    let tool_spec = client_clone.get_tool_spec().await;
+                    match tool_spec {
+                        Ok((name, specs)) => {
+                            // Each mcp server might have multiple tools.
+                            // To avoid naming conflicts we are going to namespace it.
+                            // This would also help us locate which mcp server to call the tool from.
+                            let mut out_of_spec_tool_names = Vec::<String>::new();
+                            for mut spec in specs {
+                                if !regex_clone.is_match(&spec.name) {
+                                    out_of_spec_tool_names.push(spec.name.clone());
+                                    continue;
+                                }
+                                spec.name = format!("{}{}{}", name, NAMESPACE_DELIMITER, spec.name);
+                                tool_specs_clone.lock().await.insert(spec.name.clone(), spec);
+                            }
+                            if let Some(tx_clone) = &tx_clone {
+                                let send_result = if !out_of_spec_tool_names.is_empty() {
+                                    let msg = out_of_spec_tool_names.iter().fold(
+                                        String::from("The following tool names are out of spec. They will be excluded from the list of available tools:\n"),
+                                        |mut acc, name| {
+                                            acc.push_str(format!("  - {}\n", name).as_str());
+                                            acc
+                                        }
+                                    );
+                                    tx_clone.send(LoadingMsg::Error {
+                                        name: name.clone(),
+                                        msg: eyre::eyre!(msg),
+                                    })
+                                    // TODO: if no tools are valid, we need to offload the server
+                                    // from the fleet (i.e. kill the server)
+                                } else {
+                                    tx_clone.send(LoadingMsg::Done(name.clone()))
+                                };
+                                if let Err(e) = send_result {
+                                    error!("Error while sending status update to display task: {:?}", e);
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            error!("Error obtaining tool spec for {}: {:?}", server_name_clone, e);
+                            if let Some(tx_clone) = &tx_clone {
+                                if let Err(e) = tx_clone.send(LoadingMsg::Error {
+                                    name: server_name_clone,
+                                    msg: e,
+                                }) {
+                                    error!("Error while sending status update to display task: {:?}", e);
+                                }
+                            }
+                        },
+                    }
+                    Ok::<(), eyre::Report>(())
+                }
             })
             .collect::<Vec<_>>();
-        let load_tool_results = stream::iter(load_tool)
+        // TODO: do we want to introduce a timeout here?
+        stream::iter(load_tool)
             .map(|async_closure| tokio::task::spawn(async_closure))
             .buffer_unordered(20)
             .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .filter_map(|item| item.ok())
-            .collect::<Vec<(String, _)>>();
-        for (server_name, load_tool_result) in load_tool_results {
-            match load_tool_result {
-                Ok((name, specs)) => {
-                    // Each mcp server might have multiple tools.
-                    // To avoid naming conflicts we are going to namespace it.
-                    // This would also help us locate which mcp server to call the tool from.
-                    for mut spec in specs {
-                        spec.name = format!("{}{}{}", name, NAMESPACE_DELIMITER, spec.name);
-                        tool_specs.insert(spec.name.clone(), spec);
-                    }
-                },
-                Err(e) => {
-                    execute!(
-                        output,
-                        style::SetForegroundColor(style::Color::Red),
-                        style::Print("Error"),
-                        style::ResetColor,
-                        style::Print(": Failed to obtain tool specs for "),
-                        style::SetForegroundColor(style::Color::Green),
-                        style::Print(&server_name),
-                        style::ResetColor,
-                        style::Print(format!(": {:?}", e))
-                    )?;
-                    error!("Error obtaining tool spec for {}: {:?}", server_name, e);
-                },
+            .await;
+        drop(tx);
+        if let Some(display_task) = display_task {
+            if let Err(e) = display_task.join() {
+                error!("Error while joining status display task: {:?}", e);
             }
         }
+        let tool_specs = {
+            let mutex =
+                Arc::try_unwrap(tool_specs).map_err(|e| eyre::eyre!("Error unwrapping arc for tool specs {:?}", e))?;
+            mutex.into_inner()
+        };
         Ok(tool_specs)
     }
 
@@ -363,11 +413,110 @@ fn sanitize_server_name(orig: String, regex: &regex::Regex, hasher: &mut impl Ha
     if regex.is_match(&orig) {
         return orig;
     }
-    let sanitized: String = orig.chars().filter(|c| regex.is_match(&c.to_string())).collect();
+    let sanitized: String = orig
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_')
+        .collect();
     if sanitized.is_empty() {
-        orig.hash(hasher);
-        hasher.finish().to_string()
+        hasher.write(orig.as_bytes());
+        let hash = hasher.finish().to_string();
+        return format!("a{}", hash);
+    }
+    match sanitized.chars().next() {
+        Some(c) if c.is_ascii_alphabetic() => sanitized,
+        Some(_) => {
+            format!("a{}", sanitized)
+        },
+        None => {
+            hasher.write(orig.as_bytes());
+            format!("a{}", hasher.finish())
+        },
+    }
+}
+
+fn queue_success_message(name: &str, time_taken: &str, output: &mut impl Write) -> eyre::Result<()> {
+    Ok(queue!(
+        output,
+        style::SetForegroundColor(style::Color::Green),
+        style::Print("✓ "),
+        style::SetForegroundColor(style::Color::Blue),
+        style::Print(name),
+        style::ResetColor,
+        style::Print(" loaded in "),
+        style::SetForegroundColor(style::Color::Yellow),
+        style::Print(format!("{time_taken} s\n")),
+    )?)
+}
+
+fn queue_init_message(
+    spinner_logo_idx: usize,
+    complete: usize,
+    failed: usize,
+    total: usize,
+    output: &mut impl Write,
+) -> eyre::Result<()> {
+    if total == complete {
+        queue!(
+            output,
+            style::SetForegroundColor(style::Color::Green),
+            style::Print("✓"),
+            style::ResetColor,
+        )?;
+    } else if total == complete + failed {
+        queue!(
+            output,
+            style::SetForegroundColor(style::Color::Red),
+            style::Print("✗"),
+            style::ResetColor,
+        )?;
     } else {
-        sanitized
+        queue!(output, style::Print(SPINNER_CHARS[spinner_logo_idx]))?;
+    }
+    Ok(queue!(
+        output,
+        style::SetForegroundColor(style::Color::Blue),
+        style::Print(format!(" {}", complete)),
+        style::ResetColor,
+        style::Print(" of "),
+        style::SetForegroundColor(style::Color::Blue),
+        style::Print(format!("{} ", total)),
+        style::ResetColor,
+        style::Print("mcp servers initialized\n"),
+    )?)
+}
+
+fn queue_failure_message(name: &str, fail_load_msg: &eyre::Report, output: &mut impl Write) -> eyre::Result<()> {
+    Ok(queue!(
+        output,
+        style::SetForegroundColor(style::Color::Red),
+        style::Print("✗ "),
+        style::SetForegroundColor(style::Color::Blue),
+        style::Print(name),
+        style::ResetColor,
+        style::Print(" has failed to load:\n"),
+        style::Print(fail_load_msg),
+        style::ResetColor,
+    )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_server_name() {
+        let regex = regex::Regex::new(VALID_TOOL_NAME).unwrap();
+        let mut hasher = DefaultHasher::new();
+        let orig_name = "@awslabs.cdk-mcp-server";
+        let sanitized_server_name = sanitize_server_name(orig_name.to_string(), &regex, &mut hasher);
+        assert_eq!(sanitized_server_name, "awslabscdkmcpserver");
+
+        let orig_name = "good_name";
+        let sanitized_good_name = sanitize_server_name(orig_name.to_string(), &regex, &mut hasher);
+        assert_eq!(sanitized_good_name, orig_name.to_string());
+
+        let all_bad_name = "@@@@@";
+        let sanitized_all_bad_name = sanitize_server_name(all_bad_name.to_string(), &regex, &mut hasher);
+        assert!(regex.is_match(&sanitized_all_bad_name));
     }
 }
