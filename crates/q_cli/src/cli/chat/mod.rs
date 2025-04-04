@@ -222,7 +222,8 @@ pub async fn chat(
         }
     }
 
-    let tool_config = load_tools()?;
+    let mut tool_manager = ToolManager::from_configs(mcp_server_configs).await?;
+    let tool_config = tool_manager.load_tools().await?;
     let mut tool_permissions = ToolPermissions::new(tool_config.len());
     if accept_all || trust_all_tools {
         for tool in tool_config.values() {
@@ -258,8 +259,7 @@ pub async fn chat(
         interactive,
         client,
         || terminal::window_size().map(|s| s.columns.into()).ok(),
-        Some(mcp_server_configs),
-        accept_all,
+        tool_manager,
         profile,
         tool_config,
         tool_permissions,
@@ -341,15 +341,13 @@ impl<W: Write> ChatContext<W> {
         interactive: bool,
         client: StreamingClient,
         terminal_width_provider: fn() -> Option<usize>,
-        mcp_server_config: Option<McpServerConfig>,
+        tool_manager: ToolManager,
         profile: Option<String>,
         tool_config: HashMap<String, ToolSpec>,
         tool_permissions: ToolPermissions,
     ) -> Result<Self> {
-        let mcp_server_config = mcp_server_config.unwrap_or_default();
-        let mut tool_manager = ToolManager::from_configs(mcp_server_config).await?;
         let ctx_clone = Arc::clone(&ctx);
-        let conversation_state = ConversationState::new(ctx_clone, tool_manager.load_tools().await?, profile).await;
+        let conversation_state = ConversationState::new(ctx_clone, tool_config, profile).await;
         Ok(Self {
             ctx,
             settings,
@@ -494,10 +492,10 @@ where
                     tool_uses,
                     pending_tool_index,
                 } => {
-                    let tool_uses_clone = tool_uses.clone().unwrap();
+                    let tool_uses_clone = tool_uses.clone();
                     tokio::select! {
                         res = self.handle_input(input, tool_uses, pending_tool_index) => res,
-                        Some(_) = ctrl_c_stream.recv() => Err(ChatError::Interrupted { tool_uses: Some(tool_uses_clone) })
+                        Some(_) = ctrl_c_stream.recv() => Err(ChatError::Interrupted { tool_uses: tool_uses_clone })
                     }
                 },
                 ChatState::ExecuteTools(tool_uses) => {
@@ -1875,6 +1873,9 @@ mod tests {
             ],
         ]));
 
+        let tool_manager = ToolManager::default();
+        let tool_config = serde_json::from_str::<HashMap<String, ToolSpec>>(include_str!("tools/tool_index.json"))
+            .expect("Tools failed to load");
         ChatContext::new(
             Arc::clone(&ctx),
             Settings::new_fake(),
@@ -1888,9 +1889,9 @@ mod tests {
             true,
             test_client,
             || Some(80),
+            tool_manager,
             None,
-            None,
-            load_tools().expect("Tools failed to load."),
+            tool_config,
             ToolPermissions::new(0),
         )
         .await
