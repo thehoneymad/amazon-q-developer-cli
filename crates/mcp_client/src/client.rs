@@ -189,6 +189,7 @@ where
             method: method.to_owned(),
             params,
         };
+        tracing::trace!(target: "mcp", "{} sends a request of\n{:#?}", self.server_name, request);
         let msg = JsonRpcMessage::Request(request);
         time::timeout(Duration::from_secs(self.timeout), self.transport.send(&msg)).await??;
         let mut listener = self.transport.get_listener();
@@ -275,6 +276,7 @@ where
                 });
             }
         }
+        tracing::trace!(target: "mcp", "{} receives a response of\n{:#?}", self.server_name, resp);
         Ok(serde_json::to_value(resp)?)
     }
 
