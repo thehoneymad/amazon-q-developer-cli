@@ -131,6 +131,19 @@ impl Transport for JsonRpcStdioTransport {
             },
         }
     }
+
+    async fn shutdown(&self) -> Result<(), TransportError> {
+        match self {
+            JsonRpcStdioTransport::Client { stdin, .. } => {
+                let mut stdin = stdin.lock().await;
+                Ok(stdin.shutdown().await?)
+            },
+            JsonRpcStdioTransport::Server { stdout, .. } => {
+                let mut stdout = stdout.lock().await;
+                Ok(stdout.shutdown().await?)
+            },
+        }
+    }
 }
 
 pub struct StdioListener {

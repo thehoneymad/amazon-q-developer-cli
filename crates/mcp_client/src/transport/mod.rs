@@ -38,6 +38,9 @@ pub trait Transport: Send + Sync + Debug + 'static {
     /// Listens to awaits for a response. This is a call that should be used after `send` is called
     /// to listen for a response from the message recipient.
     fn get_listener(&self) -> impl Listener;
+    /// Gracefully terminates the transport connection, cleaning up any resources.
+    /// This should be called when the transport is no longer needed to ensure proper cleanup.
+    async fn shutdown(&self) -> Result<(), TransportError>;
 }
 
 #[async_trait::async_trait]

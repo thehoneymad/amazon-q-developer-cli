@@ -617,8 +617,6 @@ mod tests {
     #[tokio::test]
     async fn test_conversation_state_history_handling_truncation() {
         let mut tool_manager = ToolManager::default();
-        let buf = Vec::<u8>::new();
-        let mut output = std::io::BufWriter::new(buf);
         let mut conversation_state =
             ConversationState::new(Context::new_fake(), tool_manager.load_tools().await.unwrap(), None).await;
 
@@ -641,8 +639,6 @@ mod tests {
     async fn test_conversation_state_history_handling_with_tool_results() {
         // Build a long conversation history of tool use results.
         let mut tool_manager = ToolManager::default();
-        let buf = Vec::<u8>::new();
-        let mut output = std::io::BufWriter::new(buf);
         let mut conversation_state =
             ConversationState::new(Context::new_fake(), tool_manager.load_tools().await.unwrap(), None).await;
         conversation_state.append_new_user_message("start".to_string()).await;
@@ -704,8 +700,6 @@ mod tests {
         ctx.fs().write(AMAZONQ_FILENAME, "test context").await.unwrap();
 
         let mut tool_manager = ToolManager::default();
-        let buf = Vec::<u8>::new();
-        let mut output = std::io::BufWriter::new(buf);
         let mut conversation_state = ConversationState::new(ctx, tool_manager.load_tools().await.unwrap(), None).await;
 
         // First, build a large conversation history. We need to ensure that the order is always

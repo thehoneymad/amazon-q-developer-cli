@@ -292,6 +292,10 @@ where
         Ok(time::timeout(Duration::from_secs(self.timeout), self.transport.send(&msg)).await??)
     }
 
+    pub async fn shutdown(&self) -> Result<(), ClientError> {
+        Ok(self.transport.shutdown().await?)
+    }
+
     fn get_id(&self) -> u64 {
         self.current_id.fetch_add(1, Ordering::SeqCst)
     }
@@ -498,6 +502,9 @@ mod tests {
         let env_two_as_str = serde_json::to_string(env_two).expect("Failed to convert env two to string");
         assert_eq!(env_one_as_str, "\"1\"".to_string());
         assert_eq!(env_two_as_str, "\"2\"".to_string());
+
+        let shutdown_result = client.shutdown().await;
+        assert!(shutdown_result.is_ok());
         Ok(())
     }
 
