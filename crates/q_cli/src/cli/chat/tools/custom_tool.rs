@@ -21,6 +21,7 @@ use serde::{
     Deserialize,
     Serialize,
 };
+use tokio::sync::RwLock;
 use tracing::warn;
 
 use super::{
@@ -43,13 +44,13 @@ pub enum CustomToolClient {
         server_name: String,
         client: McpClient<StdioTransport>,
         #[allow(dead_code)]
-        server_capabilities: Option<ServerCapabilities>,
+        server_capabilities: RwLock<Option<ServerCapabilities>>,
     },
 }
 
 impl CustomToolClient {
     // TODO: add support for http transport
-    pub async fn from_config(server_name: String, config: CustomToolConfig) -> Result<Self> {
+    pub fn from_config(server_name: String, config: CustomToolConfig) -> Result<Self> {
         let CustomToolConfig { command, args, env } = config;
         let mcp_client_config = McpClientConfig {
             server_name: server_name.clone(),
@@ -67,19 +68,26 @@ impl CustomToolClient {
             env,
         };
         let client = McpClient::<JsonRpcStdioTransport>::from_config(mcp_client_config)?;
-        let server_capabilities = Some(client.init().await?);
         Ok(CustomToolClient::Stdio {
             server_name,
             client,
-            server_capabilities,
+            server_capabilities: RwLock::new(None),
         })
     }
 
-    pub async fn get_tool_spec(&self) -> Result<(String, Vec<ToolSpec>)> {
+    pub async fn init(&self) -> Result<(String, Vec<ToolSpec>)> {
         match self {
             CustomToolClient::Stdio {
-                client, server_name, ..
+                client,
+                server_name,
+                server_capabilities,
             } => {
+                // We'll need to first initialize. This is the handshake every client and server
+                // needs to do before proceeding to anything else
+                let init_resp = client.init().await?;
+                tracing::error!("init routine completed for {server_name}");
+                server_capabilities.write().await.replace(init_resp);
+                // And now we make the server tell us what tools they have
                 let resp = client.request("tools/list", None).await?;
                 // Assuming a shape of return as per https://spec.modelcontextprotocol.io/specification/2024-11-05/server/tools/#listing-tools
                 let result = resp

@@ -222,7 +222,7 @@ pub async fn chat(
         }
     }
 
-    let mut tool_manager = ToolManager::from_configs(mcp_server_configs).await?;
+    let mut tool_manager = ToolManager::from_configs(mcp_server_configs)?;
     let tool_config = tool_manager.load_tools().await?;
     let mut tool_permissions = ToolPermissions::new(tool_config.len());
     if accept_all || trust_all_tools {

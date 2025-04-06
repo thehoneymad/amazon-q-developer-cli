@@ -131,7 +131,7 @@ pub struct ToolManager {
 }
 
 impl ToolManager {
-    pub async fn from_configs(config: McpServerConfig) -> eyre::Result<Self> {
+    pub fn from_configs(config: McpServerConfig) -> eyre::Result<Self> {
         let McpServerConfig { mcp_servers } = config;
         let regex = regex::Regex::new(VALID_TOOL_NAME)?;
         let mut hasher = DefaultHasher::new();
@@ -221,20 +221,9 @@ impl ToolManager {
             }
             Ok::<_, eyre::Report>(())
         });
-        let init_results = stream::iter(pre_initialized)
-            .map(|(name, uninit_client)| {
-                let tx_clone = tx.clone();
-                async move {
-                    let _ = tx_clone.send(LoadingMsg::Add(name.clone()));
-                    let initialized_client = uninit_client.await;
-                    (name, initialized_client)
-                }
-            })
-            .buffer_unordered(10)
-            .collect::<Vec<(String, _)>>()
-            .await;
         let mut clients = HashMap::<String, Arc<CustomToolClient>>::new();
-        for (mut name, init_res) in init_results {
+        for (mut name, init_res) in pre_initialized {
+            let _ = tx.send(LoadingMsg::Add(name.clone()));
             match init_res {
                 Ok(client) => {
                     let mut client = Arc::new(client);
@@ -281,7 +270,7 @@ impl ToolManager {
                 let regex_clone = regex.clone();
                 let tool_specs_clone = tool_specs.clone();
                 async move {
-                    let tool_spec = client_clone.get_tool_spec().await;
+                    let tool_spec = client_clone.init().await;
                     match tool_spec {
                         Ok((name, specs)) => {
                             // Each mcp server might have multiple tools.
