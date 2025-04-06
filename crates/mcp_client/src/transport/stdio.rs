@@ -74,6 +74,21 @@ impl JsonRpcStdioTransport {
         let Some(stdin) = child_process.stdin else {
             return Err(TransportError::Custom("No stdin found on child process".to_owned()));
         };
+        let Some(stderr) = child_process.stderr else {
+            return Err(TransportError::Custom("No stderr found on child process".to_owned()));
+        };
+        // Currently this is just here so it does not pipe buffer deadlock
+        // We could just resolve this via having the child processes inherit the stderr
+        // But then that would clutter the consumer's UI with whatever the server decides to
+        // pipe to stderr
+        tokio::task::spawn(async {
+            let stderr = tokio::io::BufReader::new(stderr);
+            let mut lines = stderr.lines();
+            while let Ok(Some(_line)) = lines.next_line().await {
+                // TODO: perhaps we make this more purposeful? Perhaps exposing it to the client
+                // and logging it to a file?
+            }
+        });
         let stdin = Arc::new(Mutex::new(stdin));
         Self::spawn_reader(stdout, tx);
         Ok(JsonRpcStdioTransport::Client { stdin, receiver })
