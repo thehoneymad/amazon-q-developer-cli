@@ -24,6 +24,8 @@ struct Handler {
     storage: Mutex<HashMap<String, serde_json::Value>>,
     tool_spec: Mutex<HashMap<String, Response>>,
     tool_spec_key_list: Mutex<Vec<String>>,
+    prompts: Mutex<HashMap<String, Response>>,
+    prompt_key_list: Mutex<Vec<String>>,
 }
 
 impl PreServerRequestHandler for Handler {
@@ -224,6 +226,96 @@ impl ServerRequestHandler for Handler {
                 }));
                 send_request("sampling/createMessage", params)?;
                 Ok(None)
+            },
+            "store_mock_prompts" => {
+                let Some(params) = params else {
+                    eprintln!("Params missing from store mock prompts");
+                    return Ok(None);
+                };
+                // expecting a mock_prompts: { key: String, value: serde_json::Value }[];
+                let Ok(mock_prompts) = serde_json::from_value::<Vec<serde_json::Value>>(params) else {
+                    eprintln!("Failed to convert to mock specs from value");
+                    return Ok(None);
+                };
+                let self_prompts = self.prompts.lock().await;
+                let mut self_prompt_key_list = self.prompt_key_list.lock().await;
+                let _ = mock_prompts.iter().fold(self_prompts, |mut acc, spec| {
+                    let Some(key) = spec.get("key").cloned() else {
+                        return acc;
+                    };
+                    let Ok(key) = serde_json::from_value::<String>(key) else {
+                        eprintln!("Failed to convert serde value to string for key");
+                        return acc;
+                    };
+                    self_prompt_key_list.push(key.clone());
+                    acc.insert(key, spec.get("value").cloned());
+                    acc
+                });
+                Ok(None)
+            },
+            "prompts/list" => {
+                if let Some(params) = params {
+                    if let Some(cursor) = params.get("cursor").cloned() {
+                        let Ok(cursor) = serde_json::from_value::<String>(cursor) else {
+                            eprintln!("Failed to convert cursor to string: {:#?}", params);
+                            return Ok(None);
+                        };
+                        let self_prompt_key_list = self.prompt_key_list.lock().await;
+                        let self_prompts = self.prompts.lock().await;
+                        let (next_cursor, spec) = {
+                            'blk: {
+                                for (i, item) in self_prompt_key_list.iter().enumerate() {
+                                    if item == &cursor {
+                                        break 'blk (
+                                            self_prompt_key_list.get(i + 1).cloned(),
+                                            self_prompts.get(&cursor).cloned().unwrap(),
+                                        );
+                                    }
+                                }
+                                (None, None)
+                            }
+                        };
+                        if let Some(next_cursor) = next_cursor {
+                            return Ok(Some(serde_json::json!({
+                                "prompts": [spec.unwrap()],
+                                "nextCursor": next_cursor,
+                            })));
+                        } else {
+                            return Ok(Some(serde_json::json!({
+                                "prompts": [spec.unwrap()],
+                            })));
+                        }
+                    } else {
+                        eprintln!("Params exist but cursor is missing");
+                        return Ok(None);
+                    }
+                } else {
+                    let first_key = self
+                        .prompt_key_list
+                        .lock()
+                        .await
+                        .first()
+                        .expect("First key missing from prompts")
+                        .clone();
+                    let first_value = self
+                        .prompts
+                        .lock()
+                        .await
+                        .get(&first_key)
+                        .expect("First value missing from prompts")
+                        .clone();
+                    let second_key = self
+                        .prompt_key_list
+                        .lock()
+                        .await
+                        .get(1)
+                        .expect("Second key missing from prompts")
+                        .clone();
+                    return Ok(Some(serde_json::json!({
+                        "prompts": [first_value],
+                        "nextCursor": second_key
+                    })));
+                };
             },
             _ => Err(ServerError::MissingMethod),
         }

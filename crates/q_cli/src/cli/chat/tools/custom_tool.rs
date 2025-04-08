@@ -11,6 +11,7 @@ use fig_os_shim::Context;
 use mcp_client::{
     Client as McpClient,
     ClientConfig as McpClientConfig,
+    JsonRpcResponse,
     JsonRpcStdioTransport,
     MessageContent,
     ServerCapabilities,
@@ -43,7 +44,6 @@ pub enum CustomToolClient {
     Stdio {
         server_name: String,
         client: McpClient<StdioTransport>,
-        #[allow(dead_code)]
         server_capabilities: RwLock<Option<ServerCapabilities>>,
     },
 }
@@ -85,13 +85,12 @@ impl CustomToolClient {
                 // We'll need to first initialize. This is the handshake every client and server
                 // needs to do before proceeding to anything else
                 let init_resp = client.init().await?;
-                tracing::error!("init routine completed for {server_name}");
                 server_capabilities.write().await.replace(init_resp);
                 // And now we make the server tell us what tools they have
                 let resp = client.request("tools/list", None).await?;
                 // Assuming a shape of return as per https://spec.modelcontextprotocol.io/specification/2024-11-05/server/tools/#listing-tools
                 let result = resp
-                    .get("result")
+                    .result
                     .ok_or(eyre::eyre!("Failed to retrieve result for custom tool {}", server_name))?;
                 let tools = result.get("tools").ok_or(eyre::eyre!(
                     "Failed to retrieve tools from result for custom tool {}",
@@ -103,7 +102,7 @@ impl CustomToolClient {
         }
     }
 
-    pub async fn request(&self, method: &str, params: Option<serde_json::Value>) -> Result<serde_json::Value> {
+    pub async fn request(&self, method: &str, params: Option<serde_json::Value>) -> Result<JsonRpcResponse> {
         match self {
             CustomToolClient::Stdio { client, .. } => Ok(client.request(method, params).await?),
         }
@@ -130,7 +129,7 @@ impl CustomTool {
         // Assuming a response shape as per https://spec.modelcontextprotocol.io/specification/2024-11-05/server/tools/#calling-tools
         let resp = self.client.request(self.method.as_str(), self.params.clone()).await?;
         let result = resp
-            .get("result")
+            .result
             .ok_or(eyre::eyre!("{} invocation failed to produce a result", self.name))?;
 
         match serde_json::from_value::<ToolCallResult>(result.clone()) {

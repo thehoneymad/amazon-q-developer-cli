@@ -77,6 +77,34 @@ pub struct PromptsListResult {
     pub next_cursor: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Represents an argument to be supplied to a [Prompt]
+pub struct PromptArg {
+    /// The name identifier of the prompt
+    pub name: String,
+    /// Optional description providing context about the prompt
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Indicates whether a response to this prompt is required
+    /// If not specified, defaults to false
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Represents a template with which a reusable prompt can be retrieved from a server
+pub struct Prompt {
+    /// Unique identifier for the prompt
+    pub name: String,
+    /// Optional description providing context about the prompt's purpose
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Optional list of arguments that define the structure of information to be collected
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Vec<PromptArg>>,
+}
 /// Result of listing tools operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{
+    AtomicBool,
     AtomicU64,
     Ordering,
 };
@@ -11,6 +12,7 @@ use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use serde::Deserialize;
 use thiserror::Error;
+use tokio::sync::RwLock;
 use tokio::time;
 
 use crate::transport::base_protocol::{
@@ -29,6 +31,7 @@ use crate::{
     JsonRpcResponse,
     Listener as _,
     PaginationSupportedOps,
+    Prompt,
     PromptsListResult,
     ResourceTemplatesListResult,
     ResourcesListResult,
@@ -71,6 +74,21 @@ pub enum ClientError {
 }
 
 #[derive(Debug)]
+struct PromptContainer {
+    has_queried_once: AtomicBool,
+    prompts: Arc<RwLock<HashMap<String, Prompt>>>,
+}
+
+impl Default for PromptContainer {
+    fn default() -> Self {
+        Self {
+            has_queried_once: AtomicBool::new(false),
+            prompts: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Client<T: Transport> {
     server_name: String,
     transport: Arc<T>,
@@ -78,6 +96,7 @@ pub struct Client<T: Transport> {
     server_process_id: Pid,
     init_params: serde_json::Value,
     current_id: AtomicU64,
+    prompts: PromptContainer,
 }
 
 impl Client<StdioTransport> {
@@ -119,6 +138,7 @@ impl Client<StdioTransport> {
             server_process_id,
             init_params,
             current_id: AtomicU64::new(0),
+            prompts: PromptContainer::default(),
         })
     }
 }
@@ -173,7 +193,28 @@ where
         }
         self.notify("initialized", None).await?;
 
-        Ok(server_capabilities)
+        Ok(serde_json::to_value(server_capabilities)?)
+    }
+
+    pub async fn list_prompts(&self) -> Result<Arc<RwLock<HashMap<String, Prompt>>>, ClientError> {
+        let has_queried_once = self.prompts.has_queried_once.load(Ordering::Relaxed);
+        if !has_queried_once {
+            self.prompts.has_queried_once.store(true, Ordering::SeqCst);
+            let resp = self.request("prompts/list", None).await?;
+            let Some(result) = resp.result else {
+                return Ok(self.prompts.prompts.clone());
+            };
+            let Some(prompts) = result.get("prompts") else {
+                return Ok(self.prompts.prompts.clone());
+            };
+            let prompts = serde_json::from_value::<Vec<Prompt>>(prompts.clone())?;
+            let mut lock = self.prompts.prompts.write().await;
+            for prompt in prompts {
+                let name = prompt.name.clone();
+                lock.insert(name, prompt);
+            }
+        }
+        Ok(self.prompts.prompts.clone())
     }
 
     /// Sends a request to the server associated.
@@ -182,7 +223,7 @@ where
         &self,
         method: &str,
         params: Option<serde_json::Value>,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<JsonRpcResponse, ClientError> {
         let request = JsonRpcRequest {
             jsonrpc: JsonRpcVersion::default(),
             id: self.get_id(),
@@ -277,7 +318,7 @@ where
             }
         }
         tracing::trace!(target: "mcp", "From {}:\n{:#?}", self.server_name, resp);
-        Ok(serde_json::to_value(resp)?)
+        Ok(resp)
     }
 
     /// Sends a notification to the server associated.
@@ -301,25 +342,12 @@ where
     }
 }
 
-fn examine_server_capabilities(ser_cap: &serde_json::Value) -> Result<(), ClientError> {
+fn examine_server_capabilities(ser_cap: &JsonRpcResponse) -> Result<(), ClientError> {
     // Check the jrpc version.
     // Currently we are only proceeding if the versions are EXACTLY the same.
-    let jrpc_version = ser_cap
-        .get("jsonrpc")
-        .map(|v| {
-            v.to_string()
-                .trim_matches('"')
-                .replace("\\\"", "\"")
-                .split(".")
-                .map(|n| n.parse::<u32>())
-                .collect::<Vec<Result<u32, _>>>()
-        })
-        .ok_or(ClientError::NegotiationError("Missing jsonrpc from server".to_owned()))?;
+    let jrpc_version = ser_cap.jsonrpc.as_u32_vec();
     let client_jrpc_version = JsonRpcVersion::default().as_u32_vec();
     for (sv, cv) in jrpc_version.iter().zip(client_jrpc_version.iter()) {
-        let sv = sv
-            .as_ref()
-            .map_err(|e| ClientError::NegotiationError(format!("Failed to parse server jrpc version: {:?}", e)))?;
         if sv != cv {
             return Err(ClientError::NegotiationError(
                 "Incompatible jrpc version between server and client".to_owned(),
@@ -441,6 +469,7 @@ mod tests {
         client: &mut Client<T>,
         cap_sent: serde_json::Value,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // Test init
         let _ = client.init().await.expect("Client init failed");
         tokio::time::sleep(time::Duration::from_millis(1500)).await;
         let client_capabilities_sent = client
@@ -448,7 +477,7 @@ mod tests {
             .await
             .expect("Verify init ack mock request failed");
         let has_server_recvd_init_ack = client_capabilities_sent
-            .get("result")
+            .result
             .expect("Failed to retrieve client capabilities sent.");
         assert_eq!(has_server_recvd_init_ack.to_string(), "true");
         let cap_recvd = client
@@ -456,16 +485,17 @@ mod tests {
             .await
             .expect("Verify init params mock request failed");
         let cap_recvd = cap_recvd
-            .get("result")
+            .result
             .expect("Verify init params mock request does not contain required field (result)");
-        assert!(are_json_values_equal(&cap_sent, cap_recvd));
+        assert!(are_json_values_equal(&cap_sent, &cap_recvd));
 
-        let fake_server_names = ["get_weather_one", "get_weather_two", "get_weather_three"];
-        let mock_result_spec = fake_server_names.map(create_fake_tool_spec);
+        // test list tools
+        let fake_tool_names = ["get_weather_one", "get_weather_two", "get_weather_three"];
+        let mock_result_spec = fake_tool_names.map(create_fake_tool_spec);
         let mock_tool_specs_for_verify = serde_json::json!(mock_result_spec.clone());
         let mock_tool_specs_prep_param = mock_result_spec
             .iter()
-            .zip(fake_server_names.iter())
+            .zip(fake_tool_names.iter())
             .map(|(v, n)| {
                 serde_json::json!({
                     "key": (*n).to_string(),
@@ -482,19 +512,54 @@ mod tests {
         let tool_spec_recvd = client.request("tools/list", None).await.expect("List tools failed");
         assert!(are_json_values_equal(
             tool_spec_recvd
-                .get("result")
+                .result
+                .as_ref()
                 .and_then(|v| v.get("tools"))
                 .expect("Failed to retrieve tool specs from result received"),
             &mock_tool_specs_for_verify
         ));
+
+        // Test list prompts
+        let fake_prompt_names = ["code_review_one", "code_review_two", "code_review_three"];
+        let mock_result_prompts = fake_prompt_names.map(create_fake_prompts);
+        let mock_prompts_for_verify = serde_json::json!(mock_result_prompts.clone());
+        let mock_prompts_prep_param = mock_result_prompts
+            .iter()
+            .zip(fake_prompt_names.iter())
+            .map(|(v, n)| {
+                serde_json::json!({
+                    "key": (*n).to_string(),
+                    "value": v
+                })
+            })
+            .collect::<Vec<serde_json::Value>>();
+        let mock_prompts_prep_param =
+            serde_json::to_value(mock_prompts_prep_param).expect("Failed to create mock prompts prep param");
+        let _ = client
+            .request("store_mock_prompts", Some(mock_prompts_prep_param))
+            .await
+            .expect("Mock prompt prep failed");
+        let prompts_recvd = client.request("prompts/list", None).await.expect("List prompts failed");
+        assert!(are_json_values_equal(
+            prompts_recvd
+                .result
+                .as_ref()
+                .and_then(|v| v.get("prompts"))
+                .expect("Failed to retrieve prompts from results received"),
+            &mock_prompts_for_verify
+        ));
+
+        // Test env var inclusion
         let env_vars = client.request("get_env_vars", None).await.expect("Get env vars failed");
         let env_one = env_vars
-            .get("result")
+            .result
+            .as_ref()
             .expect("Failed to retrieve results from env var request")
             .get("ENV_ONE")
             .expect("Failed to retrieve env one from env var request");
         let env_two = env_vars
-            .get("result")
+            .result
+            .as_ref()
             .expect("Failed to retrieve results from env var request")
             .get("ENV_TWO")
             .expect("Failed to retrieve env two from env var request");
@@ -536,9 +601,9 @@ mod tests {
         }
     }
 
-    fn create_fake_tool_spec(name_to_append: &str) -> serde_json::Value {
+    fn create_fake_tool_spec(name: &str) -> serde_json::Value {
         serde_json::json!({
-            "name": name_to_append,
+            "name": name,
             "description": "Get current weather information for a location",
             "inputSchema": {
               "type": "object",
@@ -550,6 +615,20 @@ mod tests {
               },
               "required": ["location"]
             }
+        })
+    }
+
+    fn create_fake_prompts(name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "description": "Asks the LLM to analyze code quality and suggest improvements",
+            "arguments": [
+              {
+                "name": "code",
+                "description": "The code to review",
+                "required": true
+              }
+            ]
         })
     }
 }
