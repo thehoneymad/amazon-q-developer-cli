@@ -1,6 +1,10 @@
 //! This is a bin used solely for testing the client
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::atomic::{
+    AtomicU8,
+    Ordering,
+};
 
 use mcp_client::server::{
     self,
@@ -26,6 +30,7 @@ struct Handler {
     tool_spec_key_list: Mutex<Vec<String>>,
     prompts: Mutex<HashMap<String, Response>>,
     prompt_key_list: Mutex<Vec<String>>,
+    prompt_list_call_no: AtomicU8,
 }
 
 impl PreServerRequestHandler for Handler {
@@ -254,6 +259,7 @@ impl ServerRequestHandler for Handler {
                 Ok(None)
             },
             "prompts/list" => {
+                self.prompt_list_call_no.fetch_add(1, Ordering::Relaxed);
                 if let Some(params) = params {
                     if let Some(cursor) = params.get("cursor").cloned() {
                         let Ok(cursor) = serde_json::from_value::<String>(cursor) else {
@@ -317,6 +323,10 @@ impl ServerRequestHandler for Handler {
                     })));
                 };
             },
+            "get_prompt_list_call_no" => Ok(Some(
+                serde_json::to_value::<u8>(self.prompt_list_call_no.load(Ordering::Relaxed))
+                    .expect("Failed to convert list call no to u8"),
+            )),
             _ => Err(ServerError::MissingMethod),
         }
     }

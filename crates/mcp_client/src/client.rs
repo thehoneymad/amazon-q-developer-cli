@@ -519,7 +519,7 @@ mod tests {
             &mock_tool_specs_for_verify
         ));
 
-        // Test list prompts
+        // Test list prompts directly
         let fake_prompt_names = ["code_review_one", "code_review_two", "code_review_three"];
         let mock_result_prompts = fake_prompt_names.map(create_fake_prompts);
         let mock_prompts_for_verify = serde_json::json!(mock_result_prompts.clone());
@@ -548,6 +548,24 @@ mod tests {
                 .expect("Failed to retrieve prompts from results received"),
             &mock_prompts_for_verify
         ));
+
+        // Test list prompts with local caching
+        let prompts = client.list_prompts().await.expect("Failed to list prompts indirectly");
+        let prompt_len = prompts.read().await.len();
+        assert_eq!(prompt_len, 3);
+        let _ = client.list_prompts().await.expect("Failed to list prompts indirectly");
+        let tool_list_call_no = client
+            .request("get_prompt_list_call_no", None)
+            .await
+            .expect("Failed to retrieve prompt list call no");
+        let call_no = tool_list_call_no
+            .result
+            .expect("Failed to retrieve prompt list call no");
+        let call_no = serde_json::from_value::<u8>(call_no).expect("Failed to convert prompt list call no to u8");
+        // total_number_of_calls =
+        // 3 paginations from direct  + 3 paginations from indirect + 0 from second indirect
+        //   (because it is cached)
+        assert_eq!(call_no, 6);
 
         // Test env var inclusion
         let env_vars = client.request("get_env_vars", None).await.expect("Get env vars failed");
