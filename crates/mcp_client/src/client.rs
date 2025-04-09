@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::Arc;
 use std::sync::atomic::{
-    AtomicBool,
     AtomicU64,
     Ordering,
+};
+use std::sync::{
+    Arc,
+    RwLock as SyncRwLock,
 };
 use std::time::Duration;
 
@@ -12,7 +14,6 @@ use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use serde::Deserialize;
 use thiserror::Error;
-use tokio::sync::RwLock;
 use tokio::time;
 
 use crate::transport::base_protocol::{
@@ -71,21 +72,8 @@ pub enum ClientError {
     InvalidPath,
     #[error("{0}")]
     ProcessKillError(String),
-}
-
-#[derive(Debug)]
-struct PromptContainer {
-    has_queried_once: AtomicBool,
-    prompts: Arc<RwLock<HashMap<String, Prompt>>>,
-}
-
-impl Default for PromptContainer {
-    fn default() -> Self {
-        Self {
-            has_queried_once: AtomicBool::new(false),
-            prompts: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
+    #[error("{0}")]
+    PoisonError(String),
 }
 
 #[derive(Debug)]
@@ -95,8 +83,22 @@ pub struct Client<T: Transport> {
     timeout: u64,
     server_process_id: Pid,
     init_params: serde_json::Value,
-    current_id: AtomicU64,
-    prompts: PromptContainer,
+    current_id: Arc<AtomicU64>,
+    prompts: Arc<SyncRwLock<HashMap<String, Prompt>>>,
+}
+
+impl<T: Transport> Clone for Client<T> {
+    fn clone(&self) -> Self {
+        Self {
+            server_name: self.server_name.clone(),
+            transport: self.transport.clone(),
+            timeout: self.timeout,
+            server_process_id: self.server_process_id,
+            init_params: self.init_params.clone(),
+            current_id: self.current_id.clone(),
+            prompts: self.prompts.clone(),
+        }
+    }
 }
 
 impl Client<StdioTransport> {
@@ -137,8 +139,8 @@ impl Client<StdioTransport> {
             timeout,
             server_process_id,
             init_params,
-            current_id: AtomicU64::new(0),
-            prompts: PromptContainer::default(),
+            current_id: Arc::new(AtomicU64::new(0)),
+            prompts: Arc::new(SyncRwLock::new(HashMap::new())),
         })
     }
 }
@@ -193,28 +195,50 @@ where
         }
         self.notify("initialized", None).await?;
 
-        Ok(serde_json::to_value(server_capabilities)?)
-    }
-
-    pub async fn list_prompts(&self) -> Result<Arc<RwLock<HashMap<String, Prompt>>>, ClientError> {
-        let has_queried_once = self.prompts.has_queried_once.load(Ordering::Relaxed);
-        if !has_queried_once {
-            self.prompts.has_queried_once.store(true, Ordering::SeqCst);
-            let resp = self.request("prompts/list", None).await?;
+        // Prefetch prompts in the background. We should only do this after the server has been
+        // initialized
+        let client_ref = (*self).clone();
+        tokio::spawn(async move {
+            let Ok(resp) = client_ref.request("prompts/list", None).await else {
+                tracing::error!("Prompt list query failed for {0}", client_ref.server_name);
+                return;
+            };
             let Some(result) = resp.result else {
-                return Ok(self.prompts.prompts.clone());
+                tracing::warn!("Prompt list query returned no result for {0}", client_ref.server_name);
+                return;
             };
             let Some(prompts) = result.get("prompts") else {
-                return Ok(self.prompts.prompts.clone());
+                tracing::warn!(
+                    "Prompt list query result contained no field named prompts for {0}",
+                    client_ref.server_name
+                );
+                return;
             };
-            let prompts = serde_json::from_value::<Vec<Prompt>>(prompts.clone())?;
-            let mut lock = self.prompts.prompts.write().await;
+            let Ok(prompts) = serde_json::from_value::<Vec<Prompt>>(prompts.clone()) else {
+                tracing::error!(
+                    "Prompt list query deserialization failed for {0}",
+                    client_ref.server_name
+                );
+                return;
+            };
+            let Ok(mut lock) = client_ref.prompts.write() else {
+                tracing::error!(
+                    "Failed to obtain write lock for prompt list query for {0}",
+                    client_ref.server_name
+                );
+                return;
+            };
             for prompt in prompts {
                 let name = prompt.name.clone();
                 lock.insert(name, prompt);
             }
-        }
-        Ok(self.prompts.prompts.clone())
+        });
+
+        Ok(serde_json::to_value(server_capabilities)?)
+    }
+
+    pub fn list_prompts(&self) -> Arc<SyncRwLock<HashMap<String, Prompt>>> {
+        self.prompts.clone()
     }
 
     /// Sends a request to the server associated.
@@ -224,9 +248,10 @@ where
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<JsonRpcResponse, ClientError> {
+        let mut id = self.get_id();
         let request = JsonRpcRequest {
             jsonrpc: JsonRpcVersion::default(),
-            id: self.get_id(),
+            id,
             method: method.to_owned(),
             params,
         };
@@ -239,7 +264,9 @@ where
             // background loop handle them
             loop {
                 if let JsonRpcMessage::Response(resp) = listener.recv().await? {
-                    break Ok::<JsonRpcResponse, TransportError>(resp);
+                    if resp.id == id {
+                        break Ok::<JsonRpcResponse, TransportError>(resp);
+                    }
                 }
             }
         })
@@ -287,9 +314,10 @@ where
                     if next_cursor.is_none() {
                         break;
                     }
+                    id = self.get_id();
                     let next_request = JsonRpcRequest {
                         jsonrpc: JsonRpcVersion::default(),
-                        id: self.get_id(),
+                        id,
                         method: method.to_owned(),
                         params: Some(serde_json::json!({
                             "cursor": next_cursor,
@@ -302,7 +330,9 @@ where
                         // background loop handle them
                         loop {
                             if let JsonRpcMessage::Response(resp) = listener.recv().await? {
-                                break Ok::<JsonRpcResponse, TransportError>(resp);
+                                if resp.id == id {
+                                    break Ok::<JsonRpcResponse, TransportError>(resp);
+                                }
                             }
                         }
                     })
@@ -548,24 +578,6 @@ mod tests {
                 .expect("Failed to retrieve prompts from results received"),
             &mock_prompts_for_verify
         ));
-
-        // Test list prompts with local caching
-        let prompts = client.list_prompts().await.expect("Failed to list prompts indirectly");
-        let prompt_len = prompts.read().await.len();
-        assert_eq!(prompt_len, 3);
-        let _ = client.list_prompts().await.expect("Failed to list prompts indirectly");
-        let tool_list_call_no = client
-            .request("get_prompt_list_call_no", None)
-            .await
-            .expect("Failed to retrieve prompt list call no");
-        let call_no = tool_list_call_no
-            .result
-            .expect("Failed to retrieve prompt list call no");
-        let call_no = serde_json::from_value::<u8>(call_no).expect("Failed to convert prompt list call no to u8");
-        // total_number_of_calls =
-        // 3 paginations from direct  + 3 paginations from indirect + 0 from second indirect
-        //   (because it is cached)
-        assert_eq!(call_no, 6);
 
         // Test env var inclusion
         let env_vars = client.request("get_env_vars", None).await.expect("Get env vars failed");

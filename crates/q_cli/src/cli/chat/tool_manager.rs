@@ -33,6 +33,7 @@ use tokio::sync::Mutex;
 use tracing::error;
 
 use super::parser::ToolUse;
+use super::prompt::PromptInfo;
 use super::tools::Tool;
 use super::tools::custom_tool::{
     CustomToolClient,
@@ -124,15 +125,30 @@ impl McpServerConfig {
 }
 
 #[derive(Default)]
-pub struct ToolManager {
-    clients: HashMap<String, Arc<CustomToolClient>>,
-    loading_display_task: Option<std::thread::JoinHandle<Result<(), eyre::Report>>>,
-    loading_status_sender: Option<std::sync::mpsc::Sender<LoadingMsg>>,
+pub struct ToolManagerBuilder {
+    mcp_server_config: Option<McpServerConfig>,
+    prompt_list_sender: Option<std::sync::mpsc::Sender<Vec<PromptInfo>>>,
+    prompt_list_receiver: Option<std::sync::mpsc::Receiver<()>>,
 }
 
-impl ToolManager {
-    pub fn from_configs(config: McpServerConfig) -> eyre::Result<Self> {
-        let McpServerConfig { mcp_servers } = config;
+impl ToolManagerBuilder {
+    pub fn msp_server_config(mut self, config: McpServerConfig) -> Self {
+        self.mcp_server_config.replace(config);
+        self
+    }
+
+    pub fn prompt_list_sender(mut self, sender: std::sync::mpsc::Sender<Vec<PromptInfo>>) -> Self {
+        self.prompt_list_sender.replace(sender);
+        self
+    }
+
+    pub fn prompt_list_receiver(mut self, receiver: std::sync::mpsc::Receiver<()>) -> Self {
+        self.prompt_list_receiver.replace(receiver);
+        self
+    }
+
+    pub fn build(mut self) -> eyre::Result<ToolManager> {
+        let McpServerConfig { mcp_servers } = self.mcp_server_config.ok_or(eyre::eyre!("Missing mcp server config"))?;
         let regex = regex::Regex::new(VALID_TOOL_NAME)?;
         let mut hasher = DefaultHasher::new();
         let pre_initialized = mcp_servers
@@ -145,6 +161,7 @@ impl ToolManager {
             })
             .collect::<Vec<(String, _)>>();
 
+        // Send up task to update user on server loading status
         let (tx, rx) = std::sync::mpsc::channel::<LoadingMsg>();
         // Using a hand rolled thread because it's just easier to do this than do deal with the Send
         // requirements that comes with holding onto the stdout lock.
@@ -245,13 +262,48 @@ impl ToolManager {
         }
         let loading_display_task = Some(loading_display_task);
         let loading_status_sender = Some(tx);
-        Ok(Self {
+
+        // Set up task to handle prompt requests
+        let sender = self.prompt_list_sender.take();
+        let receiver = self.prompt_list_receiver.take();
+        // TODO: accommodate hot reload of mcp servers
+        if let (Some(sender), Some(receiver)) = (sender, receiver) {
+            let clients_arc = Arc::new(clients.clone());
+            tokio::task::spawn_blocking(move || {
+                let receiver = Arc::new(std::sync::Mutex::new(receiver));
+                loop {
+                    receiver.lock().map_err(|e| eyre::eyre!("{:?}", e))?.recv()?;
+                    let sender_clone = sender.clone();
+                    let clients = clients_arc.clone();
+                    let prompts = clients
+                        .iter()
+                        .map(|(n, c)| (n.clone(), c.list_prompts()))
+                        .collect::<Vec<_>>();
+                    if let Err(e) = sender_clone.send(prompts) {
+                        error!("Error sending prompts to chat helper: {:?}", e);
+                    }
+                }
+                #[allow(unreachable_code)]
+                Ok::<(), eyre::Report>(())
+            });
+        }
+
+        Ok(ToolManager {
             clients,
             loading_display_task,
             loading_status_sender,
         })
     }
+}
 
+#[derive(Default)]
+pub struct ToolManager {
+    clients: HashMap<String, Arc<CustomToolClient>>,
+    loading_display_task: Option<std::thread::JoinHandle<Result<(), eyre::Report>>>,
+    loading_status_sender: Option<std::sync::mpsc::Sender<LoadingMsg>>,
+}
+
+impl ToolManager {
     pub async fn load_tools(&mut self) -> eyre::Result<HashMap<String, ToolSpec>> {
         let tx = self.loading_status_sender.take();
         let display_task = self.loading_display_task.take();

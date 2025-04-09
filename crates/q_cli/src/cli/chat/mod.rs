@@ -62,6 +62,7 @@ use parser::{
     ResponseParser,
     ToolUse,
 };
+use prompt::PromptInfo;
 use regex::Regex;
 use serde_json::Map;
 use spinners::{
@@ -76,6 +77,7 @@ use tokio::signal::unix::{
 use tool_manager::{
     McpServerConfig,
     ToolManager,
+    ToolManagerBuilder,
 };
 use tools::gh_issue::GhIssueContext;
 use tools::{
@@ -222,7 +224,13 @@ pub async fn chat(
         }
     }
 
-    let mut tool_manager = ToolManager::from_configs(mcp_server_configs)?;
+    let (prompt_request_sender, prompt_request_receiver) = std::sync::mpsc::channel::<()>();
+    let (prompt_response_sender, prompt_response_receiver) = std::sync::mpsc::channel::<Vec<PromptInfo>>();
+    let mut tool_manager = ToolManagerBuilder::default()
+        .msp_server_config(mcp_server_configs)
+        .prompt_list_sender(prompt_response_sender)
+        .prompt_list_receiver(prompt_request_receiver)
+        .build()?;
     let tool_config = tool_manager.load_tools().await?;
     let mut tool_permissions = ToolPermissions::new(tool_config.len());
     if accept_all || trust_all_tools {
@@ -255,7 +263,7 @@ pub async fn chat(
         Settings::new(),
         output,
         input,
-        InputSource::new()?,
+        InputSource::new(prompt_request_sender, prompt_response_receiver)?,
         interactive,
         client,
         || terminal::window_size().map(|s| s.columns.into()).ok(),

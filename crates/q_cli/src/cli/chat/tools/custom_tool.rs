@@ -14,6 +14,7 @@ use mcp_client::{
     JsonRpcResponse,
     JsonRpcStdioTransport,
     MessageContent,
+    Prompt,
     ServerCapabilities,
     StdioTransport,
     ToolCallResult,
@@ -57,6 +58,8 @@ impl CustomToolClient {
             bin_path: command.clone(),
             args,
             timeout: 120,
+            // TODO: some of this isn't really up to the consumer.
+            // We need to have this defined in the mcp client crate.
             init_params: serde_json::json!({
                  "protocolVersion": "2024-11-05",
                  "capabilities": {},
@@ -105,6 +108,12 @@ impl CustomToolClient {
     pub async fn request(&self, method: &str, params: Option<serde_json::Value>) -> Result<JsonRpcResponse> {
         match self {
             CustomToolClient::Stdio { client, .. } => Ok(client.request(method, params).await?),
+        }
+    }
+
+    pub fn list_prompts(&self) -> Arc<std::sync::RwLock<HashMap<String, Prompt>>> {
+        match self {
+            CustomToolClient::Stdio { client, .. } => client.list_prompts(),
         }
     }
 
