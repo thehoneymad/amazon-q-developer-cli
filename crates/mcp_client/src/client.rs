@@ -81,7 +81,7 @@ pub struct Client<T: Transport> {
     server_name: String,
     transport: Arc<T>,
     timeout: u64,
-    server_process_id: Pid,
+    server_process_id: Option<Pid>,
     init_params: serde_json::Value,
     current_id: Arc<AtomicU64>,
     prompts: Arc<SyncRwLock<HashMap<String, Prompt>>>,
@@ -93,7 +93,9 @@ impl<T: Transport> Clone for Client<T> {
             server_name: self.server_name.clone(),
             transport: self.transport.clone(),
             timeout: self.timeout,
-            server_process_id: self.server_process_id,
+            // Note that we cannot have an id for the clone because we would kill the original
+            // process when we drop the clone
+            server_process_id: None,
             init_params: self.init_params.clone(),
             current_id: self.current_id.clone(),
             prompts: self.prompts.clone(),
@@ -133,6 +135,7 @@ impl Client<StdioTransport> {
                 .try_into()
                 .map_err(|_| ClientError::MissingProcessId)?,
         );
+        let server_process_id = Some(server_process_id);
         let transport = Arc::new(transport::stdio::JsonRpcStdioTransport::client(child)?);
         Ok(Self {
             server_name,
@@ -150,8 +153,12 @@ impl<T> Drop for Client<T>
 where
     T: Transport,
 {
+    // IF the servers are implemented well, they will shutdown once the pipe closes.
+    // This drop trait is here as a fail safe to ensure we don't leave behind any orphans.
     fn drop(&mut self) {
-        let _ = nix::sys::signal::kill(self.server_process_id, Signal::SIGTERM);
+        if let Some(process_id) = self.server_process_id {
+            let _ = nix::sys::signal::kill(process_id, Signal::SIGTERM);
+        }
     }
 }
 
@@ -188,7 +195,6 @@ where
 
         let server_capabilities = self.request("initialize", Some(self.init_params.clone())).await?;
         if let Err(e) = examine_server_capabilities(&server_capabilities) {
-            let _ = nix::sys::signal::kill(self.server_process_id, Signal::SIGTERM);
             return Err(ClientError::NegotiationError(format!(
                 "Client {} has failed to negotiate server capabilities with server: {:?}",
                 self.server_name, e
