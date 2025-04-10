@@ -195,44 +195,51 @@ where
         }
         self.notify("initialized", None).await?;
 
+        // TODO: group this into examine_server_capabilities
         // Prefetch prompts in the background. We should only do this after the server has been
         // initialized
-        let client_ref = (*self).clone();
-        tokio::spawn(async move {
-            let Ok(resp) = client_ref.request("prompts/list", None).await else {
-                tracing::error!("Prompt list query failed for {0}", client_ref.server_name);
-                return;
-            };
-            let Some(result) = resp.result else {
-                tracing::warn!("Prompt list query returned no result for {0}", client_ref.server_name);
-                return;
-            };
-            let Some(prompts) = result.get("prompts") else {
-                tracing::warn!(
-                    "Prompt list query result contained no field named prompts for {0}",
-                    client_ref.server_name
-                );
-                return;
-            };
-            let Ok(prompts) = serde_json::from_value::<Vec<Prompt>>(prompts.clone()) else {
-                tracing::error!(
-                    "Prompt list query deserialization failed for {0}",
-                    client_ref.server_name
-                );
-                return;
-            };
-            let Ok(mut lock) = client_ref.prompts.write() else {
-                tracing::error!(
-                    "Failed to obtain write lock for prompt list query for {0}",
-                    client_ref.server_name
-                );
-                return;
-            };
-            for prompt in prompts {
-                let name = prompt.name.clone();
-                lock.insert(name, prompt);
+        if let Some(res) = &server_capabilities.result {
+            if let Some(cap) = res.get("capabilities") {
+                if cap.get("prompts").is_some() {
+                    let client_ref = (*self).clone();
+                    tokio::spawn(async move {
+                        let Ok(resp) = client_ref.request("prompts/list", None).await else {
+                            tracing::error!("Prompt list query failed for {0}", client_ref.server_name);
+                            return;
+                        };
+                        let Some(result) = resp.result else {
+                            tracing::warn!("Prompt list query returned no result for {0}", client_ref.server_name);
+                            return;
+                        };
+                        let Some(prompts) = result.get("prompts") else {
+                            tracing::warn!(
+                                "Prompt list query result contained no field named prompts for {0}",
+                                client_ref.server_name
+                            );
+                            return;
+                        };
+                        let Ok(prompts) = serde_json::from_value::<Vec<Prompt>>(prompts.clone()) else {
+                            tracing::error!(
+                                "Prompt list query deserialization failed for {0}",
+                                client_ref.server_name
+                            );
+                            return;
+                        };
+                        let Ok(mut lock) = client_ref.prompts.write() else {
+                            tracing::error!(
+                                "Failed to obtain write lock for prompt list query for {0}",
+                                client_ref.server_name
+                            );
+                            return;
+                        };
+                        for prompt in prompts {
+                            let name = prompt.name.clone();
+                            lock.insert(name, prompt);
+                        }
+                    });
+                }
             }
-        });
+        }
 
         Ok(serde_json::to_value(server_capabilities)?)
     }
