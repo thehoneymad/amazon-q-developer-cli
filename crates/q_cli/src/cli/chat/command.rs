@@ -535,7 +535,7 @@ impl Command {
                                 Some(c) if c.to_lowercase() == "get" => {
                                     // Need to reconstruct the input because simple splitting of
                                     // white space might not be sufficient
-                                    let command = parts[3..].join("");
+                                    let command = parts[3..].join(" ");
                                     let get_command = parse_input_to_prompts_get_command(command.as_str())?;
                                     let subcommand = PromptsSubcommand::Get { get_command };
                                     Self::Tools {

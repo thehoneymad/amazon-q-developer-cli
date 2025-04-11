@@ -140,7 +140,7 @@ impl PromptCompleter {
         PromptCompleter { sender, receiver }
     }
 
-    fn complete_prompt(&self, word: &str, start: usize) -> Result<(usize, Vec<String>), ReadlineError> {
+    fn complete_prompt(&self, word: &str) -> Result<Vec<String>, ReadlineError> {
         let sender = &self.sender;
         let receiver = &self.receiver;
         sender
@@ -162,7 +162,7 @@ impl PromptCompleter {
             }
         }
 
-        Ok((start, list))
+        Ok(list)
     }
 }
 
@@ -196,10 +196,10 @@ impl Completer for ChatCompleter {
             return Ok(complete_command(word, start));
         }
 
-        if word.starts_with('?') {
-            if let Ok((pos, completions)) = self.prompt_completer.complete_prompt(word, start) {
+        if line.starts_with('?') {
+            if let Ok(completions) = self.prompt_completer.complete_prompt(line) {
                 if !completions.is_empty() {
-                    return Ok((pos, completions));
+                    return Ok((0, completions));
                 }
             }
         }
