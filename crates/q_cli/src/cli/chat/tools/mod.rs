@@ -73,7 +73,7 @@ impl Tool {
             Tool::FsWrite(_) => true,
             Tool::ExecuteBash(execute_bash) => execute_bash.requires_acceptance(),
             Tool::UseAws(use_aws) => use_aws.requires_acceptance(),
-            Tool::Custom(_) => false,
+            Tool::Custom(_) => true,
             Tool::GhIssue(_) => false,
         }
     }
