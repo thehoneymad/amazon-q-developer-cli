@@ -33,8 +33,8 @@ impl JsonRpcVersion {
 // declared.
 pub enum JsonRpcMessage {
     Response(JsonRpcResponse),
-    Request(JsonRpcRequest),
     Notification(JsonRpcNotification),
+    Request(JsonRpcRequest),
 }
 
 impl JsonRpcMessage {

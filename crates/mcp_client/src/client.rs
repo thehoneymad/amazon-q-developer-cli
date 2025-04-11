@@ -184,7 +184,7 @@ where
                             JsonRpcMessage::Request(_req) => {},
                             JsonRpcMessage::Notification(notif) => {
                                 let JsonRpcNotification { method, params, .. } = notif;
-                                if method.as_str() == "notifications/message" {
+                                if method.as_str() == "notifications/message" || method.as_str() == "message" {
                                     let level = params
                                         .as_ref()
                                         .and_then(|p| p.get("level"))
@@ -229,6 +229,7 @@ where
         let transport_ref = self.transport.clone();
         let server_name = self.server_name.clone();
 
+        // Spawning a task to listen and log stderr output
         tokio::spawn(async move {
             let mut log_listener = transport_ref.get_log_listener();
             loop {
