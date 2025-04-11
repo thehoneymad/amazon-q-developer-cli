@@ -32,7 +32,7 @@ use crate::{
     JsonRpcResponse,
     Listener as _,
     PaginationSupportedOps,
-    Prompt,
+    PromptGet,
     PromptsListResult,
     ResourceTemplatesListResult,
     ResourcesListResult,
@@ -84,7 +84,7 @@ pub struct Client<T: Transport> {
     server_process_id: Option<Pid>,
     init_params: serde_json::Value,
     current_id: Arc<AtomicU64>,
-    prompts: Arc<SyncRwLock<HashMap<String, Prompt>>>,
+    prompts: Arc<SyncRwLock<HashMap<String, PromptGet>>>,
 }
 
 impl<T: Transport> Clone for Client<T> {
@@ -225,7 +225,7 @@ where
                             );
                             return;
                         };
-                        let Ok(prompts) = serde_json::from_value::<Vec<Prompt>>(prompts.clone()) else {
+                        let Ok(prompts) = serde_json::from_value::<Vec<PromptGet>>(prompts.clone()) else {
                             tracing::error!(
                                 "Prompt list query deserialization failed for {0}",
                                 client_ref.server_name
@@ -251,7 +251,7 @@ where
         Ok(serde_json::to_value(server_capabilities)?)
     }
 
-    pub fn list_prompts(&self) -> Arc<SyncRwLock<HashMap<String, Prompt>>> {
+    pub fn list_prompt_gets(&self) -> Arc<SyncRwLock<HashMap<String, PromptGet>>> {
         self.prompts.clone()
     }
 

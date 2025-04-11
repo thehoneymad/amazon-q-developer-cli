@@ -14,7 +14,7 @@ use mcp_client::{
     JsonRpcResponse,
     JsonRpcStdioTransport,
     MessageContent,
-    Prompt,
+    PromptGet,
     ServerCapabilities,
     StdioTransport,
     ToolCallResult,
@@ -111,9 +111,9 @@ impl CustomToolClient {
         }
     }
 
-    pub fn list_prompts(&self) -> Arc<std::sync::RwLock<HashMap<String, Prompt>>> {
+    pub fn list_prompt_gets(&self) -> Arc<std::sync::RwLock<HashMap<String, PromptGet>>> {
         match self {
-            CustomToolClient::Stdio { client, .. } => client.list_prompts(),
+            CustomToolClient::Stdio { client, .. } => client.list_prompt_gets(),
         }
     }
 

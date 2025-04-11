@@ -21,6 +21,7 @@ use fig_api_client::model::{
 };
 use fig_os_shim::Context;
 use fig_util::Shell;
+use mcp_client::Prompt;
 use rand::distr::{
     Alphanumeric,
     SampleString,
@@ -120,6 +121,40 @@ impl ConversationState {
     pub fn clear(&mut self) {
         self.next_message = None;
         self.history.clear();
+    }
+
+    pub fn append_prompts(&mut self, mut prompts: VecDeque<Prompt>) {
+        while let Some(prompt) = prompts.pop_front() {
+            let Prompt { role, content } = prompt;
+            match role {
+                mcp_client::Role::User => {
+                    let user_msg = UserInputMessage {
+                        content: content.into(),
+                        user_input_message_context: Some(UserInputMessageContext {
+                            shell_state: Some(build_shell_state()),
+                            env_state: Some(build_env_state()),
+                            tool_results: None,
+                            tools: if self.tools.is_empty() {
+                                None
+                            } else {
+                                Some(self.tools.clone())
+                            },
+                            ..Default::default()
+                        }),
+                        user_intent: None,
+                    };
+                    self.history.push_back(ChatMessage::UserInputMessage(user_msg));
+                },
+                mcp_client::Role::Assistant => {
+                    let assistant_msg = AssistantResponseMessage {
+                        message_id: None,
+                        tool_uses: None,
+                        content: content.into(),
+                    };
+                    self.push_assistant_message(assistant_msg);
+                },
+            }
+        }
     }
 
     pub async fn append_new_user_message(&mut self, input: String) {

@@ -1,7 +1,7 @@
 use eyre::Result;
 use rustyline::error::ReadlineError;
 
-use super::prompt::PromptInfo;
+use super::prompt::PromptGetInfo;
 use crate::cli::chat::prompt::rl;
 
 #[derive(Debug)]
@@ -27,7 +27,7 @@ mod inner {
 impl InputSource {
     pub fn new(
         sender: std::sync::mpsc::Sender<()>,
-        receiver: std::sync::mpsc::Receiver<Vec<PromptInfo>>,
+        receiver: std::sync::mpsc::Receiver<Vec<PromptGetInfo>>,
     ) -> Result<Self> {
         Ok(Self(inner::Inner::Readline(rl(sender, receiver)?)))
     }

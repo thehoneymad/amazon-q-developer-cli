@@ -44,9 +44,26 @@ pub enum OpsConversionError {
     InvalidMethod,
 }
 
-/// Result of listing resources operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Role assumed for a particular message
+pub enum Role {
+    User,
+    Assistant,
+}
+
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Role::User => write!(f, "user"),
+            Role::Assistant => write!(f, "assistant"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Result of listing resources operation
 pub struct ResourcesListResult {
     /// List of resources
     pub resources: Vec<serde_json::Value>,
@@ -66,9 +83,9 @@ pub struct ResourceTemplatesListResult {
     pub next_cursor: Option<String>,
 }
 
-/// Result of listing prompts operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Result of prompt listing query
 pub struct PromptsListResult {
     /// List of prompts
     pub prompts: Vec<serde_json::Value>,
@@ -79,8 +96,8 @@ pub struct PromptsListResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Represents an argument to be supplied to a [Prompt]
-pub struct PromptArg {
+/// Represents an argument to be supplied to a [PromptGet]
+pub struct PromptGetArg {
     /// The name identifier of the prompt
     pub name: String,
     /// Optional description providing context about the prompt
@@ -94,8 +111,8 @@ pub struct PromptArg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Represents a template with which a reusable prompt can be retrieved from a server
-pub struct Prompt {
+/// Represents a request to get a prompt from a mcp server
+pub struct PromptGet {
     /// Unique identifier for the prompt
     pub name: String,
     /// Optional description providing context about the prompt's purpose
@@ -103,11 +120,29 @@ pub struct Prompt {
     pub description: Option<String>,
     /// Optional list of arguments that define the structure of information to be collected
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub arguments: Option<Vec<PromptArg>>,
+    pub arguments: Option<Vec<PromptGetArg>>,
 }
-/// Result of listing tools operation
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// `result` field in [JsonRpcResponse] from a `prompts/get` request
+pub struct PromptGetResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub messages: Vec<Prompt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Completed prompt from `prompts/get` to be returned by a mcp server
+pub struct Prompt {
+    pub role: Role,
+    pub content: MessageContent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Result of listing tools operation
 pub struct ToolsListResult {
     /// List of tools
     pub tools: Vec<serde_json::Value>,
@@ -145,6 +180,30 @@ pub enum MessageContent {
         /// The resource
         resource: Resource,
     },
+}
+
+impl From<MessageContent> for String {
+    fn from(val: MessageContent) -> Self {
+        match val {
+            MessageContent::Text { text } => text,
+            MessageContent::Image { data, mime_type } => serde_json::json!({
+                "data": data,
+                "mime_type": mime_type
+            })
+            .to_string(),
+            MessageContent::Resource { resource } => serde_json::json!(resource).to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for MessageContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MessageContent::Text { text } => write!(f, "{}", text),
+            MessageContent::Image { data: _, mime_type } => write!(f, "Image [base64-encoded-string] ({})", mime_type),
+            MessageContent::Resource { resource } => write!(f, "Resource: {} ({})", resource.title, resource.uri),
+        }
+    }
 }
 
 /// Resource contents

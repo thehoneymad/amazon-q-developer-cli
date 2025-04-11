@@ -25,6 +25,7 @@ use futures::{
     StreamExt,
     stream,
 };
+use mcp_client::PromptGet;
 use serde::{
     Deserialize,
     Serialize,
@@ -33,7 +34,7 @@ use tokio::sync::Mutex;
 use tracing::error;
 
 use super::parser::ToolUse;
-use super::prompt::PromptInfo;
+use super::prompt::PromptGetInfo;
 use super::tools::Tool;
 use super::tools::custom_tool::{
     CustomToolClient,
@@ -127,7 +128,7 @@ impl McpServerConfig {
 #[derive(Default)]
 pub struct ToolManagerBuilder {
     mcp_server_config: Option<McpServerConfig>,
-    prompt_list_sender: Option<std::sync::mpsc::Sender<Vec<PromptInfo>>>,
+    prompt_list_sender: Option<std::sync::mpsc::Sender<Vec<PromptGetInfo>>>,
     prompt_list_receiver: Option<std::sync::mpsc::Receiver<()>>,
 }
 
@@ -137,7 +138,7 @@ impl ToolManagerBuilder {
         self
     }
 
-    pub fn prompt_list_sender(mut self, sender: std::sync::mpsc::Sender<Vec<PromptInfo>>) -> Self {
+    pub fn prompt_list_sender(mut self, sender: std::sync::mpsc::Sender<Vec<PromptGetInfo>>) -> Self {
         self.prompt_list_sender.replace(sender);
         self
     }
@@ -275,11 +276,11 @@ impl ToolManagerBuilder {
                     receiver.lock().map_err(|e| eyre::eyre!("{:?}", e))?.recv()?;
                     let sender_clone = sender.clone();
                     let clients = clients_arc.clone();
-                    let prompts = clients
+                    let prompt_gets = clients
                         .iter()
-                        .map(|(n, c)| (n.clone(), c.list_prompts()))
+                        .map(|(n, c)| (n.clone(), c.list_prompt_gets()))
                         .collect::<Vec<_>>();
-                    if let Err(e) = sender_clone.send(prompts) {
+                    if let Err(e) = sender_clone.send(prompt_gets) {
                         error!("Error sending prompts to chat helper: {:?}", e);
                     }
                 }
@@ -298,7 +299,7 @@ impl ToolManagerBuilder {
 
 #[derive(Default)]
 pub struct ToolManager {
-    clients: HashMap<String, Arc<CustomToolClient>>,
+    pub clients: HashMap<String, Arc<CustomToolClient>>,
     loading_display_task: Option<std::thread::JoinHandle<Result<(), eyre::Report>>>,
     loading_status_sender: Option<std::sync::mpsc::Sender<LoadingMsg>>,
 }
@@ -447,6 +448,17 @@ impl ToolManager {
                 Tool::Custom(custom_tool)
             },
         })
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn get_prompt_gets(&self) -> Vec<(&String, Arc<std::sync::RwLock<HashMap<String, PromptGet>>>)> {
+        self.clients
+            .iter()
+            .map(|(k, v)| {
+                let prompts = v.list_prompt_gets();
+                (k, prompts)
+            })
+            .collect()
     }
 }
 
