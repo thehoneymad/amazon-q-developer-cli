@@ -199,8 +199,8 @@ pub enum PromptsSubcommand {
 
 impl PromptsSubcommand {
     const AVAILABLE_COMMANDS: &str = color_print::cstr! {"<cyan!>Available subcommands</cyan!>
-  <em>help</em>                                      <black!>Show an explanation for the prompts command</black!>
-  <em>list [search word]</em>                        <black!>List available prompts from a tool or show all available prompts</black!>"};
+  <em>help</em>                                                     <black!>Show an explanation for the prompts command</black!>
+  <em>list [search word]</em>                                       <black!>List available prompts from a tool or show all available prompts</black!>"};
     const BASE_COMMAND: &str = color_print::cstr! {"<cyan!>Usage: /tools prompts [SUBCOMMAND]</cyan!>
 
 <cyan!>Description</cyan!>
@@ -216,7 +216,9 @@ Prompts are reusable templates that help you quickly access common workflows and
 These templates are provided by the mcp servers you have installed and configured.
 
 To actually retrieve a prompt, directly start with the following command (without prepending /tools prompt):
-<em>?<<server name>> <<prompt>> [args]</em>              <black!>Retrieve prompt specified</black!>
+<em>?<<server name>> <<prompt>> [--arg=value]</em>                      <black!>Retrieve prompt specified</black!>
+Or if you prefer the long way:
+<em>/tools prompts get <<server name>> <<prompt>> [--arg=value]</em>    <black!>Retrieve prompt specified</black!>
 
 {}
 

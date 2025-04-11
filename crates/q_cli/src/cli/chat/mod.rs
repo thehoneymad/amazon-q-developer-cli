@@ -1289,15 +1289,12 @@ where
                         PromptsSubcommand::List { search_word } => {
                             let prompt_infos = self.tool_manager.get_prompt_gets();
                             for (server_name, prompts) in prompt_infos {
-                                for (prompt_name, prompt) in prompts
-                                    .read()
-                                    .map_err(|e| {
-                                        ChatError::Custom(
-                                            format!("Poison error encountered while retrieving prompts: {}", e).into(),
-                                        )
-                                    })?
-                                    .iter()
-                                {
+                                let read_lock = prompts.read().map_err(|e| {
+                                    ChatError::Custom(
+                                        format!("Poison error encountered while retrieving prompts: {}", e).into(),
+                                    )
+                                })?;
+                                for (prompt_name, prompt) in read_lock.iter() {
                                     if let Some(ref p) = search_word {
                                         if !(server_name.contains(p) || prompt_name.contains(p)) {
                                             continue;
@@ -1306,28 +1303,28 @@ where
                                     let full_prompt_name = format!("{server_name} {prompt_name}");
                                     queue!(
                                         self.output,
-                                        style::Print("\n\n"),
+                                        style::Print("\n"),
                                         style::SetForegroundColor(Color::Cyan),
                                         style::Print(full_prompt_name),
                                         style::SetForegroundColor(Color::Reset),
-                                        style::Print("\n"),
                                     )?;
                                     if let Some(ref desc) = prompt.description {
                                         queue!(
                                             self.output,
+                                            style::Print("\n"),
                                             style::SetAttribute(Attribute::Bold),
                                             style::Print("description: "),
                                             style::SetAttribute(Attribute::Reset),
                                             style::SetForegroundColor(Color::DarkGrey),
                                             style::Print(desc),
                                             style::SetForegroundColor(Color::Reset),
-                                            style::Print("\n"),
                                         )?;
                                     }
                                     if let Some(ref args) = prompt.arguments {
                                         queue!(
                                             self.output,
                                             style::SetAttribute(Attribute::Bold),
+                                            style::Print("\n"),
                                             style::Print("arguments:"),
                                             style::SetAttribute(Attribute::Reset),
                                         )?;
@@ -1369,6 +1366,7 @@ where
                                             }
                                         }
                                     }
+                                    queue!(self.output, style::Print("\n"))?;
                                 }
                             }
                         },
