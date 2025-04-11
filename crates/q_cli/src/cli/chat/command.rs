@@ -14,15 +14,35 @@ use serde::{
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
-    Ask { prompt: String },
-    Execute { command: String },
+    Ask {
+        prompt: String,
+    },
+    Execute {
+        command: String,
+    },
     Clear,
     Help,
-    Issue { prompt: Option<String> },
+    Issue {
+        prompt: Option<String>,
+    },
     Quit,
-    Profile { subcommand: ProfileSubcommand },
-    Context { subcommand: ContextSubcommand },
-    Tools { subcommand: Option<ToolsSubcommand> },
+    Profile {
+        subcommand: ProfileSubcommand,
+    },
+    Context {
+        subcommand: ContextSubcommand,
+    },
+    PromptEditor {
+        initial_text: Option<String>,
+    },
+    Compact {
+        prompt: Option<String>,
+        show_summary: bool,
+        help: bool,
+    },
+    Tools {
+        subcommand: Option<ToolsSubcommand>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,19 +116,20 @@ impl ContextSubcommand {
     const ADD_USAGE: &str = "/context add [--global] [--force] <path1> [path2...]";
     const AVAILABLE_COMMANDS: &str = color_print::cstr! {"<cyan!>Available commands</cyan!>
   <em>help</em>                           <black!>Show an explanation for the context command</black!>
-  <em>show [--expand]</em>                <black!>Display current context configuration</black!>
-                                 <black!>Use --expand to list all matched files</black!>
+
+  <em>show [--expand]</em>                <black!>Display the context rule configuration and matched files</black!>
+                                          <black!>--expand: Print out each matched file's content</black!>
 
   <em>add [--global] [--force] <<paths...>></em>
-                                 <black!>Add file(s) to context</black!>
-                                 <black!>--global: Add to global context (available in all profiles)</black!>
-                                 <black!>--force: Add files even if they exceed size limits</black!>
+                                 <black!>Add context rules (filenames or glob patterns)</black!>
+                                 <black!>--global: Add to global rules (available in all profiles)</black!>
+                                 <black!>--force: Include even if matched files exceed size limits</black!>
 
-  <em>rm [--global] <<paths...>></em>       <black!>Remove file(s) from context</black!>
-                                 <black!>--global: Remove from global context</black!>
+  <em>rm [--global] <<paths...>></em>       <black!>Remove specified rules from current profile</black!>
+                                 <black!>--global: Remove specified rules globally</black!>
 
-  <em>clear [--global]</em>               <black!>Clear all files from current context</black!>
-                                 <black!>--global: Clear global context</black!>"};
+  <em>clear [--global]</em>               <black!>Remove all rules from current profile</black!>
+                                 <black!>--global: Remove global rules</black!>"};
     const CLEAR_USAGE: &str = "/context clear [--global]";
     const REMOVE_USAGE: &str = "/context rm [--global] <path1> [path2...]";
     const SHOW_USAGE: &str = "/context show [--expand]";
@@ -120,17 +141,19 @@ impl ContextSubcommand {
     pub fn help_text() -> String {
         color_print::cformat!(
             r#"
-<magenta,em>(Beta) Context Management</magenta,em>
+<magenta,em>(Beta) Context Rule Management</magenta,em>
 
-Context files provide Amazon Q with additional information about your project or environment.
-Adding relevant files to your context helps Amazon Q provide more accurate and helpful responses.
+Context rules determine which files are included in your Amazon Q session. 
+The files matched by these rules provide Amazon Q with additional information 
+about your project or environment. Adding relevant files helps Q generate 
+more accurate and helpful responses.
 
 {}
 
 <cyan!>Notes</cyan!>
 • You can add specific files or use glob patterns (e.g., "*.py", "src/**/*.js")
-• Context files are associated with the current profile
-• Global context files are available across all profiles
+• Profile rules apply only to the current profile
+• Global rules apply across all profiles
 • Context is preserved between chat sessions
 "#,
             Self::AVAILABLE_COMMANDS
@@ -159,7 +182,8 @@ impl ToolsSubcommand {
     const BASE_COMMAND: &str = color_print::cstr! {"<cyan!>Usage: /tools [SUBCOMMAND]</cyan!>
 
 <cyan!>Description</cyan!>
-  Show the current set of tools and their permission settings. 
+  Show the current set of tools and their permission setting.
+  The permission setting states when user confirmation is required. Trusted tools never require confirmation.
   Alternatively, specify a subcommand to modify the tool permissions."};
     const TRUST_USAGE: &str = "/tools trust <tool name>";
     const UNTRUST_USAGE: &str = "/tools untrust <tool name>";
@@ -279,6 +303,47 @@ impl Command {
             return Ok(match parts[0].to_lowercase().as_str() {
                 "clear" => Self::Clear,
                 "help" => Self::Help,
+                "compact" => {
+                    let mut prompt = None;
+                    let mut show_summary = false;
+                    let mut help = false;
+
+                    // Check if "help" is the first subcommand
+                    if parts.len() > 1 && parts[1].to_lowercase() == "help" {
+                        help = true;
+                    } else {
+                        let mut remaining_parts = Vec::new();
+
+                        // Parse the parts to handle both prompt and flags
+                        for part in &parts[1..] {
+                            if *part == "--summary" {
+                                show_summary = true;
+                            } else {
+                                remaining_parts.push(*part);
+                            }
+                        }
+
+                        // Check if the last word is "--summary" (which would have been captured as part of the prompt)
+                        if !remaining_parts.is_empty() {
+                            let last_idx = remaining_parts.len() - 1;
+                            if remaining_parts[last_idx] == "--summary" {
+                                remaining_parts.pop();
+                                show_summary = true;
+                            }
+                        }
+
+                        // If we have remaining parts after parsing flags, join them as the prompt
+                        if !remaining_parts.is_empty() {
+                            prompt = Some(remaining_parts.join(" "));
+                        }
+                    }
+
+                    Self::Compact {
+                        prompt,
+                        show_summary,
+                        help,
+                    }
+                },
                 "acceptall" => {
                     let _ = queue!(
                         output,
@@ -289,6 +354,15 @@ impl Command {
 
                     Self::Tools {
                         subcommand: Some(ToolsSubcommand::TrustAll),
+                    }
+                },
+                "editor" => {
+                    if parts.len() > 1 {
+                        Self::PromptEditor {
+                            initial_text: Some(parts[1..].join(" ")),
+                        }
+                    } else {
+                        Self::PromptEditor { initial_text: None }
                     }
                 },
                 "issue" => {
@@ -303,7 +377,9 @@ impl Command {
                 "q" | "exit" | "quit" => Self::Quit,
                 "profile" => {
                     if parts.len() < 2 {
-                        return Err(ProfileSubcommand::usage_msg("Missing subcommand for /profile."));
+                        return Ok(Self::Profile {
+                            subcommand: ProfileSubcommand::Help,
+                        });
                     }
 
                     macro_rules! usage_err {
@@ -375,7 +451,9 @@ impl Command {
                 },
                 "context" => {
                     if parts.len() < 2 {
-                        return Err(ContextSubcommand::usage_msg("Missing subcommand for /context."));
+                        return Ok(Self::Context {
+                            subcommand: ContextSubcommand::Help,
+                        });
                     }
 
                     macro_rules! usage_err {
@@ -389,9 +467,7 @@ impl Command {
 
                     match parts[1].to_lowercase().as_str() {
                         "show" => {
-                            // Parse show command with optional --expand flag
                             let mut expand = false;
-
                             for part in &parts[2..] {
                                 if *part == "--expand" {
                                     expand = true;
@@ -399,7 +475,6 @@ impl Command {
                                     usage_err!(ContextSubcommand::SHOW_USAGE);
                                 }
                             }
-
                             Self::Context {
                                 subcommand: ContextSubcommand::Show { expand },
                             }
@@ -645,7 +720,30 @@ mod tests {
                 }
             };
         }
+        macro_rules! compact {
+            ($prompt:expr, $show_summary:expr) => {
+                Command::Compact {
+                    prompt: $prompt,
+                    show_summary: $show_summary,
+                    help: false,
+                }
+            };
+        }
         let tests = &[
+            ("/compact", compact!(None, false)),
+            ("/compact --summary", compact!(None, true)),
+            (
+                "/compact custom prompt",
+                compact!(Some("custom prompt".to_string()), false),
+            ),
+            (
+                "/compact --summary custom prompt",
+                compact!(Some("custom prompt".to_string()), true),
+            ),
+            (
+                "/compact custom prompt --summary",
+                compact!(Some("custom prompt".to_string()), true),
+            ),
             ("/profile list", profile!(ProfileSubcommand::List)),
             (
                 "/profile create new_profile",
