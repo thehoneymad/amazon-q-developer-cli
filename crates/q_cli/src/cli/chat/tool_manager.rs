@@ -336,6 +336,10 @@ impl ToolManager {
                                     continue;
                                 }
                                 spec.name = format!("{}{}{}", name, NAMESPACE_DELIMITER, spec.name);
+                                if spec.name.len() > 64 {
+                                    out_of_spec_tool_names.push(spec.name.clone());
+                                    continue;
+                                }
                                 tool_specs_clone.lock().await.insert(spec.name.clone(), spec);
                             }
                             if let Some(tx_clone) = &tx_clone {
@@ -343,7 +347,12 @@ impl ToolManager {
                                     let msg = out_of_spec_tool_names.iter().fold(
                                         String::from("The following tool names are out of spec. They will be excluded from the list of available tools:\n"),
                                         |mut acc, name| {
-                                            acc.push_str(format!("  - {}\n", name).as_str());
+                                            let msg = if name.len() > 64 {
+                                                "exceeded max length of 64"
+                                            } else {
+                                                "must be complied with ^[a-zA-Z][a-zA-Z0-9_]*$"
+                                            };
+                                            acc.push_str(format!("  - {} ({})\n", name, msg).as_str());
                                             acc
                                         }
                                     );
