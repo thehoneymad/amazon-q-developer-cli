@@ -31,6 +31,7 @@ use crate::transport::{
 use crate::{
     JsonRpcResponse,
     Listener as _,
+    LogListener,
     PaginationSupportedOps,
     PromptGet,
     PromptsListResult,
@@ -181,13 +182,65 @@ where
                     Ok(msg) => {
                         match msg {
                             JsonRpcMessage::Request(_req) => {},
-                            JsonRpcMessage::Notification(_notif) => {},
+                            JsonRpcMessage::Notification(notif) => {
+                                let JsonRpcNotification { method, params, .. } = notif;
+                                if method.as_str() == "notifications/message" {
+                                    let level = params
+                                        .as_ref()
+                                        .and_then(|p| p.get("level"))
+                                        .and_then(|v| serde_json::to_string(v).ok());
+                                    let data = params
+                                        .as_ref()
+                                        .and_then(|p| p.get("data"))
+                                        .and_then(|v| serde_json::to_string(v).ok());
+                                    if let (Some(level), Some(data)) = (level, data) {
+                                        match level.to_lowercase().as_str() {
+                                            "error" => {
+                                                tracing::error!(target: "mcp", "{}: {}", server_name, data);
+                                            },
+                                            "warn" => {
+                                                tracing::warn!(target: "mcp", "{}: {}", server_name, data);
+                                            },
+                                            "info" => {
+                                                tracing::info!(target: "mcp", "{}: {}", server_name, data);
+                                            },
+                                            "debug" => {
+                                                tracing::debug!(target: "mcp", "{}: {}", server_name, data);
+                                            },
+                                            "trace" => {
+                                                tracing::trace!(target: "mcp", "{}: {}", server_name, data);
+                                            },
+                                            _ => {},
+                                        }
+                                    }
+                                }
+                            },
                             JsonRpcMessage::Response(_resp) => { /* noop since direct response is handled inside the request api */
                             },
                         }
                     },
                     Err(e) => {
                         tracing::error!("Background listening thread for client {}: {:?}", server_name, e);
+                    },
+                }
+            }
+        });
+
+        let transport_ref = self.transport.clone();
+        let server_name = self.server_name.clone();
+
+        tokio::spawn(async move {
+            let mut log_listener = transport_ref.get_log_listener();
+            loop {
+                match log_listener.recv().await {
+                    Ok(msg) => {
+                        tracing::trace!(target: "mcp", "{server_name} logged {}", msg);
+                    },
+                    Err(e) => {
+                        tracing::error!(
+                            "Error encounteredw while reading from stderr for {server_name}: {:?}",
+                            e
+                        );
                     },
                 }
             }

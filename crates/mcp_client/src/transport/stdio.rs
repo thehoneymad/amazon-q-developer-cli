@@ -20,6 +20,7 @@ use tokio::sync::{
 use super::base_protocol::JsonRpcMessage;
 use super::{
     Listener,
+    LogListener,
     Transport,
     TransportError,
 };
@@ -29,6 +30,7 @@ pub enum JsonRpcStdioTransport {
     Client {
         stdin: Arc<Mutex<ChildStdin>>,
         receiver: broadcast::Receiver<Result<JsonRpcMessage, TransportError>>,
+        log_receiver: broadcast::Receiver<String>,
     },
     Server {
         stdout: Arc<Mutex<Stdout>>,
@@ -77,21 +79,21 @@ impl JsonRpcStdioTransport {
         let Some(stderr) = child_process.stderr else {
             return Err(TransportError::Custom("No stderr found on child process".to_owned()));
         };
-        // Currently this is just here so it does not pipe buffer deadlock
-        // We could just resolve this via having the child processes inherit the stderr
-        // But then that would clutter the consumer's UI with whatever the server decides to
-        // pipe to stderr
-        tokio::task::spawn(async {
+        let (log_tx, log_receiver) = broadcast::channel::<String>(100);
+        tokio::task::spawn(async move {
             let stderr = tokio::io::BufReader::new(stderr);
             let mut lines = stderr.lines();
-            while let Ok(Some(_line)) = lines.next_line().await {
-                // TODO: perhaps we make this more purposeful? Perhaps exposing it to the client
-                // and logging it to a file?
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = log_tx.send(line);
             }
         });
         let stdin = Arc::new(Mutex::new(stdin));
         Self::spawn_reader(stdout, tx);
-        Ok(JsonRpcStdioTransport::Client { stdin, receiver })
+        Ok(JsonRpcStdioTransport::Client {
+            stdin,
+            receiver,
+            log_receiver,
+        })
     }
 
     pub fn server(stdin: Stdin, stdout: Stdout) -> Result<Self, TransportError> {
@@ -159,6 +161,15 @@ impl Transport for JsonRpcStdioTransport {
             },
         }
     }
+
+    fn get_log_listener(&self) -> impl LogListener {
+        match self {
+            JsonRpcStdioTransport::Client { log_receiver, .. } => StdioLogListener {
+                receiver: log_receiver.resubscribe(),
+            },
+            JsonRpcStdioTransport::Server { .. } => unreachable!("server does not need a log listener"),
+        }
+    }
 }
 
 pub struct StdioListener {
@@ -169,6 +180,17 @@ pub struct StdioListener {
 impl Listener for StdioListener {
     async fn recv(&mut self) -> Result<JsonRpcMessage, TransportError> {
         self.receiver.recv().await?
+    }
+}
+
+pub struct StdioLogListener {
+    pub receiver: broadcast::Receiver<String>,
+}
+
+#[async_trait::async_trait]
+impl LogListener for StdioLogListener {
+    async fn recv(&mut self) -> Result<String, TransportError> {
+        Ok(self.receiver.recv().await?)
     }
 }
 

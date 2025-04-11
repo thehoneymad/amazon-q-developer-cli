@@ -41,9 +41,16 @@ pub trait Transport: Send + Sync + Debug + 'static {
     /// Gracefully terminates the transport connection, cleaning up any resources.
     /// This should be called when the transport is no longer needed to ensure proper cleanup.
     async fn shutdown(&self) -> Result<(), TransportError>;
+    /// Listener that listens for logging messages.
+    fn get_log_listener(&self) -> impl LogListener;
 }
 
 #[async_trait::async_trait]
 pub trait Listener: Send + Sync + 'static {
     async fn recv(&mut self) -> Result<JsonRpcMessage, TransportError>;
+}
+
+#[async_trait::async_trait]
+pub trait LogListener: Send + Sync + 'static {
+    async fn recv(&mut self) -> Result<String, TransportError>;
 }
