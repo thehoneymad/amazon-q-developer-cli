@@ -481,7 +481,7 @@ fn sanitize_server_name(orig: String, regex: &regex::Regex, hasher: &mut impl Ha
         .collect();
     if sanitized.is_empty() {
         hasher.write(orig.as_bytes());
-        let hash = hasher.finish().to_string();
+        let hash = format!("{:03}", hasher.finish() % 1000);
         return format!("a{}", hash);
     }
     match sanitized.chars().next() {
@@ -579,6 +579,7 @@ mod tests {
 
         let all_bad_name = "@@@@@";
         let sanitized_all_bad_name = sanitize_server_name(all_bad_name.to_string(), &regex, &mut hasher);
+        println!("all bad name: {sanitized_all_bad_name}");
         assert!(regex.is_match(&sanitized_all_bad_name));
     }
 }
