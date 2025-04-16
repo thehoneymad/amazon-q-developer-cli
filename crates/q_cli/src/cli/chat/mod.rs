@@ -33,7 +33,6 @@ use std::{
 
 use command::{
     Command,
-    PromptsGetCommand,
     PromptsSubcommand,
     ToolsSubcommand,
 };
@@ -1539,177 +1538,6 @@ where
                             style::Print(command::ToolsSubcommand::help_text()),
                         )?;
                     },
-                    Some(ToolsSubcommand::Prompts { subcommand }) => match subcommand {
-                        PromptsSubcommand::Help => {
-                            queue!(
-                                self.output,
-                                style::Print("\n"),
-                                style::Print(command::PromptsSubcommand::help_text()),
-                            )?;
-                        },
-                        PromptsSubcommand::Get { get_command } => {
-                            let PromptsGetCommand { server_name, params } = get_command;
-                            let client = self
-                                .tool_manager
-                                .clients
-                                .get(&server_name)
-                                .ok_or(ChatError::Custom("No server with given name exists".into()))?;
-                            let params = serde_json::json!(params);
-                            let prompts = client.request("prompts/get", Some(params)).await.map_err(|e| {
-                                ChatError::Custom(format!("Error encountered while retrieving prompts: {:?}", e).into())
-                            })?;
-                            if let Some(err) = prompts.error {
-                                // If we are running into error we should just display the error
-                                // and abort.
-                                let to_display = serde_json::json!(err);
-                                queue!(
-                                    self.output,
-                                    style::Print("\n"),
-                                    style::SetAttribute(Attribute::Bold),
-                                    style::Print("Error encountered while retrieving prompt:"),
-                                    style::SetAttribute(Attribute::Reset),
-                                    style::Print("\n"),
-                                    style::SetForegroundColor(Color::Red),
-                                    style::Print(
-                                        serde_json::to_string_pretty(&to_display)
-                                            .unwrap_or_else(|_| format!("{:?}", &to_display))
-                                    ),
-                                    style::SetForegroundColor(Color::Reset),
-                                    style::Print("\n"),
-                                )?;
-                            } else {
-                                let prompts = prompts
-                                    .result
-                                    .ok_or(ChatError::Custom("Result field missing from prompt/get request".into()))?;
-                                let prompts = serde_json::from_value::<PromptGetResult>(prompts).map_err(|e| {
-                                    ChatError::Custom(
-                                        format!("Failed to deserialize prompt/get result: {:?}", e).into(),
-                                    )
-                                })?;
-                                self.pending_prompts.clear();
-                                self.pending_prompts.append(&mut VecDeque::from(prompts.messages));
-                                queue!(
-                                    self.output,
-                                    style::Print("\n"),
-                                    style::SetAttribute(Attribute::Bold),
-                                    style::Print("Prompt retrieved:"),
-                                    style::SetAttribute(Attribute::Reset),
-                                )?;
-                                for prompt in &self.pending_prompts {
-                                    queue!(
-                                        self.output,
-                                        style::Print("\n\n"),
-                                        style::SetAttribute(Attribute::Bold),
-                                        style::Print("role: "),
-                                        style::SetAttribute(Attribute::Reset),
-                                        style::SetForegroundColor(Color::DarkGrey),
-                                        style::Print(&prompt.role),
-                                        style::SetForegroundColor(Color::Reset),
-                                        style::Print("\n"),
-                                        style::SetAttribute(Attribute::Bold),
-                                        style::Print("content: "),
-                                        style::SetAttribute(Attribute::Reset),
-                                        style::SetForegroundColor(Color::DarkGrey),
-                                        style::Print(&prompt.content),
-                                        style::SetForegroundColor(Color::Reset)
-                                    )?;
-                                }
-                                queue!(
-                                    self.output,
-                                    style::Print("\n\n"),
-                                    style::Print("Press"),
-                                    style::SetForegroundColor(Color::Green),
-                                    style::Print(" y "),
-                                    style::SetForegroundColor(Color::Reset),
-                                    style::Print("to send"),
-                                )?;
-                            }
-                        },
-                        PromptsSubcommand::List { search_word } => {
-                            let prompt_infos = self.tool_manager.get_prompt_gets();
-                            for (server_name, prompts) in prompt_infos {
-                                let read_lock = prompts.read().map_err(|e| {
-                                    ChatError::Custom(
-                                        format!("Poison error encountered while retrieving prompts: {}", e).into(),
-                                    )
-                                })?;
-                                for (prompt_name, prompt) in read_lock.iter() {
-                                    if let Some(ref p) = search_word {
-                                        if !(server_name.contains(p) || prompt_name.contains(p)) {
-                                            continue;
-                                        }
-                                    }
-                                    let full_prompt_name = format!("{server_name} {prompt_name}");
-                                    queue!(
-                                        self.output,
-                                        style::Print("\n"),
-                                        style::SetForegroundColor(Color::Cyan),
-                                        style::Print(full_prompt_name),
-                                        style::SetForegroundColor(Color::Reset),
-                                    )?;
-                                    if let Some(ref desc) = prompt.description {
-                                        queue!(
-                                            self.output,
-                                            style::Print("\n"),
-                                            style::SetAttribute(Attribute::Bold),
-                                            style::Print("description: "),
-                                            style::SetAttribute(Attribute::Reset),
-                                            style::SetForegroundColor(Color::DarkGrey),
-                                            style::Print(desc),
-                                            style::SetForegroundColor(Color::Reset),
-                                        )?;
-                                    }
-                                    if let Some(ref args) = prompt.arguments {
-                                        queue!(
-                                            self.output,
-                                            style::SetAttribute(Attribute::Bold),
-                                            style::Print("\n"),
-                                            style::Print("arguments:"),
-                                            style::SetAttribute(Attribute::Reset),
-                                        )?;
-                                        for arg in args {
-                                            queue!(
-                                                self.output,
-                                                style::SetAttribute(Attribute::Bold),
-                                                style::SetForegroundColor(Color::Yellow),
-                                                style::Print("\nname: "),
-                                                style::SetForegroundColor(Color::Reset),
-                                                style::SetAttribute(Attribute::Reset),
-                                                style::SetForegroundColor(Color::DarkGrey),
-                                                style::Print(&arg.name),
-                                                style::SetForegroundColor(Color::Reset),
-                                                style::Print("\n"),
-                                            )?;
-                                            if let Some(ref desc) = arg.description {
-                                                queue!(
-                                                    self.output,
-                                                    style::SetAttribute(Attribute::Bold),
-                                                    style::Print("description: "),
-                                                    style::SetAttribute(Attribute::Reset),
-                                                    style::SetForegroundColor(Color::DarkGrey),
-                                                    style::Print(desc),
-                                                    style::SetForegroundColor(Color::Reset)
-                                                )?;
-                                            }
-                                            if let Some(ref required) = arg.required {
-                                                queue!(
-                                                    self.output,
-                                                    style::Print("\n"),
-                                                    style::SetAttribute(Attribute::Bold),
-                                                    style::Print("required: "),
-                                                    style::SetAttribute(Attribute::Reset),
-                                                    style::SetForegroundColor(Color::DarkGrey),
-                                                    style::Print(if *required { "true" } else { "false" }),
-                                                    style::SetForegroundColor(Color::Reset)
-                                                )?;
-                                            }
-                                        }
-                                    }
-                                    queue!(self.output, style::Print("\n"))?;
-                                }
-                            }
-                        },
-                    },
                     None => {
                         // No subcommand - print the current tools and their permissions.
 
@@ -1755,6 +1583,178 @@ where
                 // during PromptUser.
                 execute!(self.output, style::Print("\n\n"),)?;
 
+                ChatState::PromptUser {
+                    tool_uses: Some(tool_uses),
+                    pending_tool_index,
+                    skip_printing_tools: true,
+                }
+            },
+            Command::Prompts { subcommand } => {
+                match subcommand {
+                    Some(PromptsSubcommand::Help) => {
+                        queue!(self.output, style::Print(command::PromptsSubcommand::help_text()))?;
+                    },
+                    Some(PromptsSubcommand::Get { get_command }) => {
+                        let prompts = self
+                            .tool_manager
+                            .get_prompt(get_command)
+                            .await
+                            .map_err(|e| ChatError::Custom(e.to_string().into()))?;
+                        if let Some(err) = prompts.error {
+                            // If we are running into error we should just display the error
+                            // and abort.
+                            let to_display = serde_json::json!(err);
+                            queue!(
+                                self.output,
+                                style::Print("\n"),
+                                style::SetAttribute(Attribute::Bold),
+                                style::Print("Error encountered while retrieving prompt:"),
+                                style::SetAttribute(Attribute::Reset),
+                                style::Print("\n"),
+                                style::SetForegroundColor(Color::Red),
+                                style::Print(
+                                    serde_json::to_string_pretty(&to_display)
+                                        .unwrap_or_else(|_| format!("{:?}", &to_display))
+                                ),
+                                style::SetForegroundColor(Color::Reset),
+                                style::Print("\n"),
+                            )?;
+                        } else {
+                            let prompts = prompts
+                                .result
+                                .ok_or(ChatError::Custom("Result field missing from prompt/get request".into()))?;
+                            let prompts = serde_json::from_value::<PromptGetResult>(prompts).map_err(|e| {
+                                ChatError::Custom(format!("Failed to deserialize prompt/get result: {:?}", e).into())
+                            })?;
+                            self.pending_prompts.clear();
+                            self.pending_prompts.append(&mut VecDeque::from(prompts.messages));
+                            queue!(
+                                self.output,
+                                style::Print("\n"),
+                                style::SetAttribute(Attribute::Bold),
+                                style::Print("Prompt retrieved:"),
+                                style::SetAttribute(Attribute::Reset),
+                            )?;
+                            for prompt in &self.pending_prompts {
+                                queue!(
+                                    self.output,
+                                    style::Print("\n\n"),
+                                    style::SetAttribute(Attribute::Bold),
+                                    style::Print("role: "),
+                                    style::SetAttribute(Attribute::Reset),
+                                    style::SetForegroundColor(Color::DarkGrey),
+                                    style::Print(&prompt.role),
+                                    style::SetForegroundColor(Color::Reset),
+                                    style::Print("\n"),
+                                    style::SetAttribute(Attribute::Bold),
+                                    style::Print("content: "),
+                                    style::SetAttribute(Attribute::Reset),
+                                    style::SetForegroundColor(Color::DarkGrey),
+                                    style::Print(&prompt.content),
+                                    style::SetForegroundColor(Color::Reset)
+                                )?;
+                            }
+                            queue!(
+                                self.output,
+                                style::Print("\n\n"),
+                                style::Print("Press"),
+                                style::SetForegroundColor(Color::Green),
+                                style::Print(" y "),
+                                style::SetForegroundColor(Color::Reset),
+                                style::Print("to send"),
+                            )?;
+                        }
+                    },
+                    subcommand => {
+                        let search_word = match subcommand {
+                            Some(PromptsSubcommand::List { search_word }) => search_word,
+                            _ => None,
+                        };
+                        let prompt_infos = self.tool_manager.get_prompt_gets();
+                        for (server_name, prompts) in prompt_infos {
+                            let read_lock = prompts.read().map_err(|e| {
+                                ChatError::Custom(
+                                    format!("Poison error encountered while retrieving prompts: {}", e).into(),
+                                )
+                            })?;
+                            for (prompt_name, prompt) in read_lock.iter() {
+                                if let Some(ref p) = search_word {
+                                    if !(server_name.contains(p) || prompt_name.contains(p)) {
+                                        continue;
+                                    }
+                                }
+                                let full_prompt_name = format!("{server_name} {prompt_name}");
+                                queue!(
+                                    self.output,
+                                    style::Print("\n"),
+                                    style::SetForegroundColor(Color::Cyan),
+                                    style::Print(full_prompt_name),
+                                    style::SetForegroundColor(Color::Reset),
+                                )?;
+                                if let Some(ref desc) = prompt.description {
+                                    queue!(
+                                        self.output,
+                                        style::Print("\n"),
+                                        style::SetAttribute(Attribute::Bold),
+                                        style::Print("description: "),
+                                        style::SetAttribute(Attribute::Reset),
+                                        style::SetForegroundColor(Color::DarkGrey),
+                                        style::Print(desc),
+                                        style::SetForegroundColor(Color::Reset),
+                                    )?;
+                                }
+                                if let Some(ref args) = prompt.arguments {
+                                    queue!(
+                                        self.output,
+                                        style::SetAttribute(Attribute::Bold),
+                                        style::Print("\n"),
+                                        style::Print("arguments:"),
+                                        style::SetAttribute(Attribute::Reset),
+                                    )?;
+                                    for arg in args {
+                                        queue!(
+                                            self.output,
+                                            style::SetAttribute(Attribute::Bold),
+                                            style::SetForegroundColor(Color::Yellow),
+                                            style::Print("\nname: "),
+                                            style::SetForegroundColor(Color::Reset),
+                                            style::SetAttribute(Attribute::Reset),
+                                            style::SetForegroundColor(Color::DarkGrey),
+                                            style::Print(&arg.name),
+                                            style::SetForegroundColor(Color::Reset),
+                                            style::Print("\n"),
+                                        )?;
+                                        if let Some(ref desc) = arg.description {
+                                            queue!(
+                                                self.output,
+                                                style::SetAttribute(Attribute::Bold),
+                                                style::Print("description: "),
+                                                style::SetAttribute(Attribute::Reset),
+                                                style::SetForegroundColor(Color::DarkGrey),
+                                                style::Print(desc),
+                                                style::SetForegroundColor(Color::Reset)
+                                            )?;
+                                        }
+                                        if let Some(ref required) = arg.required {
+                                            queue!(
+                                                self.output,
+                                                style::Print("\n"),
+                                                style::SetAttribute(Attribute::Bold),
+                                                style::Print("required: "),
+                                                style::SetAttribute(Attribute::Reset),
+                                                style::SetForegroundColor(Color::DarkGrey),
+                                                style::Print(if *required { "true" } else { "false" }),
+                                                style::SetForegroundColor(Color::Reset)
+                                            )?;
+                                        }
+                                    }
+                                }
+                                queue!(self.output, style::Print("\n"))?;
+                            }
+                        }
+                    },
+                }
+                execute!(self.output, style::Print("\n\n"))?;
                 ChatState::PromptUser {
                     tool_uses: Some(tool_uses),
                     pending_tool_index,

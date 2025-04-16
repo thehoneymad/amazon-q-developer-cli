@@ -25,7 +25,10 @@ use futures::{
     StreamExt,
     stream,
 };
-use mcp_client::PromptGet;
+use mcp_client::{
+    JsonRpcResponse,
+    PromptGet,
+};
 use serde::{
     Deserialize,
     Serialize,
@@ -33,6 +36,7 @@ use serde::{
 use tokio::sync::Mutex;
 use tracing::error;
 
+use super::command::PromptsGetCommand;
 use super::parser::ToolUse;
 use super::prompt::PromptGetInfo;
 use super::tools::Tool;
@@ -291,15 +295,31 @@ impl ToolManagerBuilder {
 
         Ok(ToolManager {
             clients,
+            prompts: HashMap::default(),
             loading_display_task,
             loading_status_sender,
         })
     }
 }
 
+#[derive(Clone, Debug)]
+/// A collection of information that is used for the following purposes:
+/// - Checking if prompt info cached is out of date
+/// - Retrieve new prompt info
+struct PromptBundle {
+    /// The server name from which the prompt is offered / exposed
+    server_name: String,
+    /// The prompt get (info with which a prompt is retrieved) cached
+    prompt_get: PromptGet,
+}
+
 #[derive(Default)]
 pub struct ToolManager {
     pub clients: HashMap<String, Arc<CustomToolClient>>,
+    /// Cache for prompts collected from different servers
+    /// Key: prompt name
+    /// Value: a list of PromptBundle that has a prompt of this name
+    prompts: HashMap<String, Vec<PromptBundle>>,
     loading_display_task: Option<std::thread::JoinHandle<Result<(), eyre::Report>>>,
     loading_status_sender: Option<std::sync::mpsc::Sender<LoadingMsg>>,
 }
@@ -457,6 +477,159 @@ impl ToolManager {
                 Tool::Custom(custom_tool)
             },
         })
+    }
+
+    pub async fn get_prompt(&mut self, get_command: PromptsGetCommand) -> eyre::Result<JsonRpcResponse> {
+        let (server_name, prompt_name) = match get_command.params.name.split_once('/') {
+            None => (None::<String>, Some(get_command.params.name.clone())),
+            Some((server_name, prompt_name)) => (Some(server_name.to_string()), Some(prompt_name.to_string())),
+        };
+        let prompt_name = prompt_name.ok_or(eyre::eyre!("Prompt request missing prompt name"))?;
+        let mut maybe_bundles = self.prompts.get(&prompt_name);
+        let mut has_retried = false;
+        'blk: loop {
+            match (maybe_bundles, server_name.as_ref(), has_retried) {
+                // If we have more than one eligible clients but no server name specified
+                (Some(bundles), None, _) if bundles.len() > 1 => {
+                    break 'blk Err(eyre::eyre!(
+                        "Prompt {prompt_name} is offered by more than one server. Please specify the server from which you want to retrieve said prompt with server_name/{prompt_name}"
+                    ));
+                },
+                // Normal case where we have enough info to proceed
+                // Note that if bundle exists, it should never be empty
+                (Some(bundles), sn, _) => {
+                    let bundle = if bundles.len() > 1 {
+                        let Some(server_name) = sn else {
+                            maybe_bundles = None;
+                            continue 'blk;
+                        };
+                        let bundle = bundles.iter().find(|b| b.server_name == *server_name);
+                        match bundle {
+                            Some(bundle) => bundle,
+                            None => {
+                                maybe_bundles = None;
+                                continue 'blk;
+                            },
+                        }
+                    } else {
+                        bundles
+                            .first()
+                            .ok_or(eyre::eyre!("Empty prompt bundle vector encountered"))?
+                    };
+                    let server_name = bundle.server_name.clone();
+                    let client = self
+                        .clients
+                        .get(&server_name)
+                        .ok_or(eyre::eyre!("Client for prompt not found"))?;
+                    // Here we lazily update the out of date cache
+                    if client.is_prompts_out_of_date() {
+                        let prompt_gets = client.list_prompt_gets();
+                        let prompt_gets = prompt_gets.read().map_err(|e| {
+                            eyre::eyre!(
+                                "Error encountered while retrieving read lock for {prompt_name}: {:?}",
+                                e
+                            )
+                        })?;
+                        for (prompt_name, prompt_get) in prompt_gets.iter() {
+                            self.prompts
+                                .entry(prompt_name.to_string())
+                                .and_modify(|bundles| {
+                                    let mut is_modified = false;
+                                    for bundle in &mut *bundles {
+                                        let mut updated_bundle = PromptBundle {
+                                            server_name: server_name.clone(),
+                                            prompt_get: prompt_get.clone(),
+                                        };
+                                        if bundle.server_name == *server_name {
+                                            std::mem::swap(bundle, &mut updated_bundle);
+                                            is_modified = true;
+                                            break;
+                                        }
+                                    }
+                                    if !is_modified {
+                                        bundles.push(PromptBundle {
+                                            server_name: server_name.clone(),
+                                            prompt_get: prompt_get.clone(),
+                                        });
+                                    }
+                                })
+                                .or_insert(vec![PromptBundle {
+                                    server_name: server_name.clone(),
+                                    prompt_get: prompt_get.clone(),
+                                }]);
+                        }
+                        client.prompts_updated();
+                    }
+                    let PromptsGetCommand { params } = get_command;
+                    let PromptBundle { prompt_get, .. } = self
+                        .prompts
+                        .get(&prompt_name)
+                        .and_then(|bundles| bundles.iter().find(|b| b.server_name == server_name))
+                        .ok_or(eyre::eyre!("Prompt bundle not found"))?;
+                    // Here we need to convert the positional arguments into key value pair
+                    // The assignment order is assumed to be the order of args as they are
+                    // presented in PromptGet::arguments
+                    let args = if let (Some(schema), Some(value)) = (&prompt_get.arguments, &params.arguments) {
+                        let params = schema.iter().zip(value.iter()).fold(
+                            HashMap::<String, String>::new(),
+                            |mut acc, (prompt_get_arg, value)| {
+                                acc.insert(prompt_get_arg.name.clone(), value.clone());
+                                acc
+                            },
+                        );
+                        Some(serde_json::json!(params))
+                    } else {
+                        None
+                    };
+                    let params = {
+                        let mut params = serde_json::Map::new();
+                        params.insert("name".to_string(), serde_json::Value::String(prompt_name));
+                        if let Some(args) = args {
+                            params.insert("arguments".to_string(), args);
+                        }
+                        Some(serde_json::Value::Object(params))
+                    };
+                    let resp = client.request("prompts/get", params).await?;
+                    break 'blk Ok(resp);
+                },
+                // If we have no eligible clients this would mean one of the following:
+                // - The prompt does not exist, OR
+                // - This is the first time we have a query / our cache is out of date
+                // Both of which means we would have to requery
+                (None, _, false) => {
+                    has_retried = true;
+                    self.prompts = self.clients.iter().fold(
+                        HashMap::<String, Vec<PromptBundle>>::new(),
+                        |mut acc, (server_name, client)| {
+                            let prompt_gets = client.list_prompt_gets();
+                            let Ok(prompt_gets) = prompt_gets.read() else {
+                                tracing::error!("Error encountered while retrieving read lock for {prompt_name}");
+                                return acc;
+                            };
+                            for (prompt_name, prompt_get) in prompt_gets.iter() {
+                                acc.entry(prompt_name.to_string())
+                                    .and_modify(|bundles| {
+                                        bundles.push(PromptBundle {
+                                            server_name: server_name.to_owned(),
+                                            prompt_get: prompt_get.clone(),
+                                        });
+                                    })
+                                    .or_insert(vec![PromptBundle {
+                                        server_name: server_name.to_owned(),
+                                        prompt_get: prompt_get.clone(),
+                                    }]);
+                            }
+                            acc
+                        },
+                    );
+                    maybe_bundles = self.prompts.get(&prompt_name);
+                    continue 'blk;
+                },
+                (_, _, true) => {
+                    break 'blk Err(eyre::eyre!("Failed to retrieve {prompt_name}"));
+                },
+            }
+        }
     }
 
     #[allow(clippy::type_complexity)]

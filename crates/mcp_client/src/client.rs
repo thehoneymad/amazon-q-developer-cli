@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{
+    AtomicBool,
     AtomicU64,
     Ordering,
 };
@@ -85,7 +86,8 @@ pub struct Client<T: Transport> {
     server_process_id: Option<Pid>,
     init_params: serde_json::Value,
     current_id: Arc<AtomicU64>,
-    prompts: Arc<SyncRwLock<HashMap<String, PromptGet>>>,
+    prompt_gets: Arc<SyncRwLock<HashMap<String, PromptGet>>>,
+    pub is_prompts_out_of_date: Arc<AtomicBool>,
 }
 
 impl<T: Transport> Clone for Client<T> {
@@ -99,7 +101,8 @@ impl<T: Transport> Clone for Client<T> {
             server_process_id: None,
             init_params: self.init_params.clone(),
             current_id: self.current_id.clone(),
-            prompts: self.prompts.clone(),
+            prompt_gets: self.prompt_gets.clone(),
+            is_prompts_out_of_date: self.is_prompts_out_of_date.clone(),
         }
     }
 }
@@ -145,7 +148,8 @@ impl Client<StdioTransport> {
             server_process_id,
             init_params,
             current_id: Arc::new(AtomicU64::new(0)),
-            prompts: Arc::new(SyncRwLock::new(HashMap::new())),
+            prompt_gets: Arc::new(SyncRwLock::new(HashMap::new())),
+            is_prompts_out_of_date: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -286,7 +290,7 @@ where
                             );
                             return;
                         };
-                        let Ok(mut lock) = client_ref.prompts.write() else {
+                        let Ok(mut lock) = client_ref.prompt_gets.write() else {
                             tracing::error!(
                                 "Failed to obtain write lock for prompt list query for {0}",
                                 client_ref.server_name
@@ -306,7 +310,7 @@ where
     }
 
     pub fn list_prompt_gets(&self) -> Arc<SyncRwLock<HashMap<String, PromptGet>>> {
-        self.prompts.clone()
+        self.prompt_gets.clone()
     }
 
     /// Sends a request to the server associated.

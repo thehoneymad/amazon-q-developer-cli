@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crossterm::{
     queue,
@@ -121,6 +122,18 @@ impl CustomToolClient {
     pub async fn notify(&self, method: &str, params: Option<serde_json::Value>) -> Result<()> {
         match self {
             CustomToolClient::Stdio { client, .. } => Ok(client.notify(method, params).await?),
+        }
+    }
+
+    pub fn is_prompts_out_of_date(&self) -> bool {
+        match self {
+            CustomToolClient::Stdio { client, .. } => client.is_prompts_out_of_date.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn prompts_updated(&self) {
+        match self {
+            CustomToolClient::Stdio { client, .. } => client.is_prompts_out_of_date.store(false, Ordering::Relaxed),
         }
     }
 }
