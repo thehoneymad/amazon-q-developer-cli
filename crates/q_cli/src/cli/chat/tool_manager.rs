@@ -626,7 +626,7 @@ impl ToolManager {
                         }
                         client.prompts_updated();
                     }
-                    let PromptsGetCommand { params } = get_command;
+                    let PromptsGetCommand { params, .. } = get_command;
                     let PromptBundle { prompt_get, .. } = prompts_wl
                         .get(&prompt_name)
                         .and_then(|bundles| bundles.iter().find(|b| b.server_name == server_name))

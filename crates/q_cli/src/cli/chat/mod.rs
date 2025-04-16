@@ -850,17 +850,13 @@ where
                         return Ok(ChatState::ExecuteTools(tool_uses));
                     }
                 } else if !self.pending_prompts.is_empty() {
-                    if ["y", "Y"].contains(&prompt.as_str()) {
-                        let all_but_last = self
-                            .pending_prompts
-                            .drain(..self.pending_prompts.len() - 1)
-                            .collect::<VecDeque<_>>();
-                        if let Some(last) = self.pending_prompts.pop_back() {
-                            user_input = last.content.into();
-                            self.conversation_state.append_prompts(all_but_last);
-                        }
-                    } else {
-                        self.pending_prompts.clear();
+                    let all_but_last = self
+                        .pending_prompts
+                        .drain(..self.pending_prompts.len() - 1)
+                        .collect::<VecDeque<_>>();
+                    if let Some(last) = self.pending_prompts.pop_back() {
+                        user_input = last.content.into();
+                        self.conversation_state.append_prompts(all_but_last);
                     }
                 }
 
@@ -1593,7 +1589,8 @@ where
                     Some(PromptsSubcommand::Help) => {
                         queue!(self.output, style::Print(command::PromptsSubcommand::help_text()))?;
                     },
-                    Some(PromptsSubcommand::Get { get_command }) => {
+                    Some(PromptsSubcommand::Get { mut get_command }) => {
+                        let orig_input = get_command.orig_input.take();
                         let prompts = self
                             .tool_manager
                             .get_prompt(get_command)
@@ -1627,41 +1624,11 @@ where
                             })?;
                             self.pending_prompts.clear();
                             self.pending_prompts.append(&mut VecDeque::from(prompts.messages));
-                            queue!(
-                                self.output,
-                                style::Print("\n"),
-                                style::SetAttribute(Attribute::Bold),
-                                style::Print("Prompt retrieved:"),
-                                style::SetAttribute(Attribute::Reset),
-                            )?;
-                            for prompt in &self.pending_prompts {
-                                queue!(
-                                    self.output,
-                                    style::Print("\n\n"),
-                                    style::SetAttribute(Attribute::Bold),
-                                    style::Print("role: "),
-                                    style::SetAttribute(Attribute::Reset),
-                                    style::SetForegroundColor(Color::DarkGrey),
-                                    style::Print(&prompt.role),
-                                    style::SetForegroundColor(Color::Reset),
-                                    style::Print("\n"),
-                                    style::SetAttribute(Attribute::Bold),
-                                    style::Print("content: "),
-                                    style::SetAttribute(Attribute::Reset),
-                                    style::SetForegroundColor(Color::DarkGrey),
-                                    style::Print(&prompt.content),
-                                    style::SetForegroundColor(Color::Reset)
-                                )?;
-                            }
-                            queue!(
-                                self.output,
-                                style::Print("\n\n"),
-                                style::Print("Press"),
-                                style::SetForegroundColor(Color::Green),
-                                style::Print(" y "),
-                                style::SetForegroundColor(Color::Reset),
-                                style::Print("to send"),
-                            )?;
+                            return Ok(ChatState::HandleInput {
+                                input: orig_input.unwrap_or_default(),
+                                tool_uses: Some(tool_uses),
+                                pending_tool_index,
+                            });
                         }
                     },
                     subcommand => {

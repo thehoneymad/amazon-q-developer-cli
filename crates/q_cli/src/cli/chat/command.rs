@@ -256,6 +256,7 @@ Or if you prefer the long way:
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptsGetCommand {
+    pub orig_input: Option<String>,
     pub params: PromptsGetParam,
 }
 
@@ -278,7 +279,7 @@ impl Command {
                 "Did you mean to use the command '/clear' to clear the conversation? Type '/clear' to clear."
                     .to_string(),
             ),
-            "help" => Some(
+            "help" | "?" => Some(
                 "Did you mean to use the command '/help' for help? Type '/help' to see available commands.".to_string(),
             ),
             _ => None,
@@ -661,7 +662,8 @@ fn parse_input_to_prompts_get_command(command: &str) -> Result<PromptsGetCommand
         name: prompt_name,
         arguments: { if args.is_empty() { None } else { Some(args) } },
     };
-    Ok(PromptsGetCommand { params })
+    let orig_input = Some(command.to_string());
+    Ok(PromptsGetCommand { orig_input, params })
 }
 
 #[cfg(test)]
