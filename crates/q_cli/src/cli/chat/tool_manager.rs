@@ -5,8 +5,11 @@ use std::hash::{
 };
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::{
+    Arc,
+    RwLock as SyncRwLock,
+};
 
 use convert_case::Casing;
 use crossterm::{
@@ -38,7 +41,6 @@ use tracing::error;
 
 use super::command::PromptsGetCommand;
 use super::parser::ToolUse;
-use super::prompt::PromptGetInfo;
 use super::tools::Tool;
 use super::tools::custom_tool::{
     CustomToolClient,
@@ -132,8 +134,8 @@ impl McpServerConfig {
 #[derive(Default)]
 pub struct ToolManagerBuilder {
     mcp_server_config: Option<McpServerConfig>,
-    prompt_list_sender: Option<std::sync::mpsc::Sender<Vec<PromptGetInfo>>>,
-    prompt_list_receiver: Option<std::sync::mpsc::Receiver<()>>,
+    prompt_list_sender: Option<std::sync::mpsc::Sender<Vec<String>>>,
+    prompt_list_receiver: Option<std::sync::mpsc::Receiver<Option<String>>>,
 }
 
 impl ToolManagerBuilder {
@@ -142,12 +144,12 @@ impl ToolManagerBuilder {
         self
     }
 
-    pub fn prompt_list_sender(mut self, sender: std::sync::mpsc::Sender<Vec<PromptGetInfo>>) -> Self {
+    pub fn prompt_list_sender(mut self, sender: std::sync::mpsc::Sender<Vec<String>>) -> Self {
         self.prompt_list_sender.replace(sender);
         self
     }
 
-    pub fn prompt_list_receiver(mut self, receiver: std::sync::mpsc::Receiver<()>) -> Self {
+    pub fn prompt_list_receiver(mut self, receiver: std::sync::mpsc::Receiver<Option<String>>) -> Self {
         self.prompt_list_receiver.replace(receiver);
         self
     }
@@ -271,20 +273,75 @@ impl ToolManagerBuilder {
         // Set up task to handle prompt requests
         let sender = self.prompt_list_sender.take();
         let receiver = self.prompt_list_receiver.take();
+        let prompts = Arc::new(SyncRwLock::new(HashMap::default()));
         // TODO: accommodate hot reload of mcp servers
         if let (Some(sender), Some(receiver)) = (sender, receiver) {
-            let clients_arc = Arc::new(clients.clone());
+            let clients = Arc::new(clients.clone());
+            let prompts_clone = prompts.clone();
             tokio::task::spawn_blocking(move || {
                 let receiver = Arc::new(std::sync::Mutex::new(receiver));
                 loop {
-                    receiver.lock().map_err(|e| eyre::eyre!("{:?}", e))?.recv()?;
-                    let sender_clone = sender.clone();
-                    let clients = clients_arc.clone();
-                    let prompt_gets = clients
+                    let search_word = receiver.lock().map_err(|e| eyre::eyre!("{:?}", e))?.recv()?;
+                    if clients.iter().any(|(_, client)| client.is_prompts_out_of_date()) {
+                        let mut prompts_wl = prompts_clone.write().map_err(|e| {
+                            eyre::eyre!(
+                                "Error retrieving write lock on prompts for tab complete {}",
+                                e.to_string()
+                            )
+                        })?;
+                        *prompts_wl = clients.iter().fold(
+                            HashMap::<String, Vec<PromptBundle>>::new(),
+                            |mut acc, (server_name, client)| {
+                                let prompt_gets = client.list_prompt_gets();
+                                let Ok(prompt_gets) = prompt_gets.read() else {
+                                    tracing::error!("Error retrieving read lock for prompt gets for tab complete");
+                                    return acc;
+                                };
+                                for (prompt_name, prompt_get) in prompt_gets.iter() {
+                                    acc.entry(prompt_name.to_string())
+                                        .and_modify(|bundles| {
+                                            bundles.push(PromptBundle {
+                                                server_name: server_name.to_owned(),
+                                                prompt_get: prompt_get.clone(),
+                                            });
+                                        })
+                                        .or_insert(vec![PromptBundle {
+                                            server_name: server_name.to_owned(),
+                                            prompt_get: prompt_get.clone(),
+                                        }]);
+                                }
+                                client.prompts_updated();
+                                acc
+                            },
+                        );
+                    }
+                    let prompts_rl = prompts_clone.read().map_err(|e| {
+                        eyre::eyre!(
+                            "Error retrieving read lock on prompts for tab complete {}",
+                            e.to_string()
+                        )
+                    })?;
+                    let filtered_prompts = prompts_rl
                         .iter()
-                        .map(|(n, c)| (n.clone(), c.list_prompt_gets()))
+                        .flat_map(|(prompt_name, bundles)| {
+                            if bundles.len() > 1 {
+                                bundles
+                                    .iter()
+                                    .map(|b| format!("{}/{}", b.server_name, prompt_name))
+                                    .collect()
+                            } else {
+                                vec![prompt_name.to_owned()]
+                            }
+                        })
+                        .filter(|n| {
+                            if let Some(p) = &search_word {
+                                n.contains(p)
+                            } else {
+                                true
+                            }
+                        })
                         .collect::<Vec<_>>();
-                    if let Err(e) = sender_clone.send(prompt_gets) {
+                    if let Err(e) = sender.send(filtered_prompts) {
                         error!("Error sending prompts to chat helper: {:?}", e);
                     }
                 }
@@ -295,7 +352,7 @@ impl ToolManagerBuilder {
 
         Ok(ToolManager {
             clients,
-            prompts: HashMap::default(),
+            prompts,
             loading_display_task,
             loading_status_sender,
         })
@@ -319,7 +376,7 @@ pub struct ToolManager {
     /// Cache for prompts collected from different servers
     /// Key: prompt name
     /// Value: a list of PromptBundle that has a prompt of this name
-    prompts: HashMap<String, Vec<PromptBundle>>,
+    prompts: Arc<SyncRwLock<HashMap<String, Vec<PromptBundle>>>>,
     loading_display_task: Option<std::thread::JoinHandle<Result<(), eyre::Report>>>,
     loading_status_sender: Option<std::sync::mpsc::Sender<LoadingMsg>>,
 }
@@ -479,13 +536,22 @@ impl ToolManager {
         })
     }
 
-    pub async fn get_prompt(&mut self, get_command: PromptsGetCommand) -> eyre::Result<JsonRpcResponse> {
+    #[allow(clippy::await_holding_lock)]
+    pub async fn get_prompt(&self, get_command: PromptsGetCommand) -> eyre::Result<JsonRpcResponse> {
         let (server_name, prompt_name) = match get_command.params.name.split_once('/') {
             None => (None::<String>, Some(get_command.params.name.clone())),
             Some((server_name, prompt_name)) => (Some(server_name.to_string()), Some(prompt_name.to_string())),
         };
         let prompt_name = prompt_name.ok_or(eyre::eyre!("Prompt request missing prompt name"))?;
-        let mut maybe_bundles = self.prompts.get(&prompt_name);
+        // We need to use a sync lock here because this lock is also used in a blocking thread,
+        // necessitated by the fact that said thread is also responsible for using a sync channel,
+        // which is itself necessitated by the fact that consumer of said channel is calling from a
+        // sync function
+        let mut prompts_wl = self
+            .prompts
+            .write()
+            .map_err(|e| eyre::eyre!("Error retaining write lock for prompts: {}", e.to_string()))?;
+        let mut maybe_bundles = prompts_wl.get(&prompt_name);
         let mut has_retried = false;
         'blk: loop {
             match (maybe_bundles, server_name.as_ref(), has_retried) {
@@ -531,7 +597,7 @@ impl ToolManager {
                             )
                         })?;
                         for (prompt_name, prompt_get) in prompt_gets.iter() {
-                            self.prompts
+                            prompts_wl
                                 .entry(prompt_name.to_string())
                                 .and_modify(|bundles| {
                                     let mut is_modified = false;
@@ -561,8 +627,7 @@ impl ToolManager {
                         client.prompts_updated();
                     }
                     let PromptsGetCommand { params } = get_command;
-                    let PromptBundle { prompt_get, .. } = self
-                        .prompts
+                    let PromptBundle { prompt_get, .. } = prompts_wl
                         .get(&prompt_name)
                         .and_then(|bundles| bundles.iter().find(|b| b.server_name == server_name))
                         .ok_or(eyre::eyre!("Prompt bundle not found"))?;
@@ -598,7 +663,7 @@ impl ToolManager {
                 // Both of which means we would have to requery
                 (None, _, false) => {
                     has_retried = true;
-                    self.prompts = self.clients.iter().fold(
+                    *prompts_wl = self.clients.iter().fold(
                         HashMap::<String, Vec<PromptBundle>>::new(),
                         |mut acc, (server_name, client)| {
                             let prompt_gets = client.list_prompt_gets();
@@ -622,7 +687,7 @@ impl ToolManager {
                             acc
                         },
                     );
-                    maybe_bundles = self.prompts.get(&prompt_name);
+                    maybe_bundles = prompts_wl.get(&prompt_name);
                     continue 'blk;
                 },
                 (_, _, true) => {

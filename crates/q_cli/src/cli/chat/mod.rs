@@ -112,7 +112,6 @@ use parser::{
     ResponseParser,
     ToolUse,
 };
-use prompt::PromptGetInfo;
 use regex::Regex;
 use serde_json::Map;
 use spinners::{
@@ -285,8 +284,8 @@ pub async fn chat(
         }
     }
 
-    let (prompt_request_sender, prompt_request_receiver) = std::sync::mpsc::channel::<()>();
-    let (prompt_response_sender, prompt_response_receiver) = std::sync::mpsc::channel::<Vec<PromptGetInfo>>();
+    let (prompt_request_sender, prompt_request_receiver) = std::sync::mpsc::channel::<Option<String>>();
+    let (prompt_response_sender, prompt_response_receiver) = std::sync::mpsc::channel::<Vec<String>>();
     let mut tool_manager = ToolManagerBuilder::default()
         .msp_server_config(mcp_server_configs)
         .prompt_list_sender(prompt_response_sender)

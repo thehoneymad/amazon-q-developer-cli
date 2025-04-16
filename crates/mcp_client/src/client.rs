@@ -149,7 +149,7 @@ impl Client<StdioTransport> {
             init_params,
             current_id: Arc::new(AtomicU64::new(0)),
             prompt_gets: Arc::new(SyncRwLock::new(HashMap::new())),
-            is_prompts_out_of_date: Arc::new(AtomicBool::new(false)),
+            is_prompts_out_of_date: Arc::new(AtomicBool::new(true)),
         })
     }
 }
