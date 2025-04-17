@@ -36,6 +36,7 @@ use serde::{
     Deserialize,
     Serialize,
 };
+use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::error;
 
@@ -59,6 +60,24 @@ const NAMESPACE_DELIMITER: &str = "___";
 // model is just {server_name}{NAMESPACE_DELIMITER}{tool_name}
 const VALID_TOOL_NAME: &str = "^[a-zA-Z][a-zA-Z0-9_]*$";
 const SPINNER_CHARS: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+#[derive(Debug, Error)]
+pub enum GetPromptError {
+    #[error("Prompt with name {0} does not exist")]
+    PromptNotFound(String),
+    #[error("Prompt {0} is offered by more than one server. Use one of the following {1}")]
+    AmbiguousPrompt(String, String),
+    #[error("Missing client")]
+    MissingClient,
+    #[error("Missing prompt name")]
+    MissingPromptName,
+    #[error("Synchronization error: {0}")]
+    Synchronization(String),
+    #[error("Missing prompt bundle")]
+    MissingPromptInfo,
+    #[error(transparent)]
+    General(#[from] eyre::Report),
+}
 
 /// Messages used for communication between the tool initialization thread and the loading
 /// display thread. These messages control the visual loading indicators shown to
@@ -537,12 +556,12 @@ impl ToolManager {
     }
 
     #[allow(clippy::await_holding_lock)]
-    pub async fn get_prompt(&self, get_command: PromptsGetCommand) -> eyre::Result<JsonRpcResponse> {
+    pub async fn get_prompt(&self, get_command: PromptsGetCommand) -> Result<JsonRpcResponse, GetPromptError> {
         let (server_name, prompt_name) = match get_command.params.name.split_once('/') {
             None => (None::<String>, Some(get_command.params.name.clone())),
             Some((server_name, prompt_name)) => (Some(server_name.to_string()), Some(prompt_name.to_string())),
         };
-        let prompt_name = prompt_name.ok_or(eyre::eyre!("Prompt request missing prompt name"))?;
+        let prompt_name = prompt_name.ok_or(GetPromptError::MissingPromptName)?;
         // We need to use a sync lock here because this lock is also used in a blocking thread,
         // necessitated by the fact that said thread is also responsible for using a sync channel,
         // which is itself necessitated by the fact that consumer of said channel is calling from a
@@ -550,16 +569,19 @@ impl ToolManager {
         let mut prompts_wl = self
             .prompts
             .write()
-            .map_err(|e| eyre::eyre!("Error retaining write lock for prompts: {}", e.to_string()))?;
+            .map_err(|e| GetPromptError::Synchronization(e.to_string()))?;
         let mut maybe_bundles = prompts_wl.get(&prompt_name);
         let mut has_retried = false;
         'blk: loop {
             match (maybe_bundles, server_name.as_ref(), has_retried) {
                 // If we have more than one eligible clients but no server name specified
                 (Some(bundles), None, _) if bundles.len() > 1 => {
-                    break 'blk Err(eyre::eyre!(
-                        "Prompt {prompt_name} is offered by more than one server. Please specify the server from which you want to retrieve said prompt with server_name/{prompt_name}"
-                    ));
+                    break 'blk Err(GetPromptError::AmbiguousPrompt(prompt_name.clone(), {
+                        bundles.iter().fold("\n".to_string(), |mut acc, b| {
+                            acc.push_str(&format!("- @{}/{}\n", b.server_name, prompt_name));
+                            acc
+                        })
+                    }));
                 },
                 // Normal case where we have enough info to proceed
                 // Note that if bundle exists, it should never be empty
@@ -578,24 +600,16 @@ impl ToolManager {
                             },
                         }
                     } else {
-                        bundles
-                            .first()
-                            .ok_or(eyre::eyre!("Empty prompt bundle vector encountered"))?
+                        bundles.first().ok_or(GetPromptError::MissingPromptInfo)?
                     };
                     let server_name = bundle.server_name.clone();
-                    let client = self
-                        .clients
-                        .get(&server_name)
-                        .ok_or(eyre::eyre!("Client for prompt not found"))?;
+                    let client = self.clients.get(&server_name).ok_or(GetPromptError::MissingClient)?;
                     // Here we lazily update the out of date cache
                     if client.is_prompts_out_of_date() {
                         let prompt_gets = client.list_prompt_gets();
-                        let prompt_gets = prompt_gets.read().map_err(|e| {
-                            eyre::eyre!(
-                                "Error encountered while retrieving read lock for {prompt_name}: {:?}",
-                                e
-                            )
-                        })?;
+                        let prompt_gets = prompt_gets
+                            .read()
+                            .map_err(|e| GetPromptError::Synchronization(e.to_string()))?;
                         for (prompt_name, prompt_get) in prompt_gets.iter() {
                             prompts_wl
                                 .entry(prompt_name.to_string())
@@ -630,7 +644,7 @@ impl ToolManager {
                     let PromptBundle { prompt_get, .. } = prompts_wl
                         .get(&prompt_name)
                         .and_then(|bundles| bundles.iter().find(|b| b.server_name == server_name))
-                        .ok_or(eyre::eyre!("Prompt bundle not found"))?;
+                        .ok_or(GetPromptError::MissingPromptInfo)?;
                     // Here we need to convert the positional arguments into key value pair
                     // The assignment order is assumed to be the order of args as they are
                     // presented in PromptGet::arguments
@@ -691,7 +705,7 @@ impl ToolManager {
                     continue 'blk;
                 },
                 (_, _, true) => {
-                    break 'blk Err(eyre::eyre!("Failed to retrieve {prompt_name}"));
+                    break 'blk Err(GetPromptError::PromptNotFound(prompt_name));
                 },
             }
         }

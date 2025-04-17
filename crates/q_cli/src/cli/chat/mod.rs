@@ -124,6 +124,7 @@ use tokio::signal::unix::{
     signal,
 };
 use tool_manager::{
+    GetPromptError,
     McpServerConfig,
     ToolManager,
     ToolManagerBuilder,
@@ -1591,11 +1592,52 @@ where
                     },
                     Some(PromptsSubcommand::Get { mut get_command }) => {
                         let orig_input = get_command.orig_input.take();
-                        let prompts = self
-                            .tool_manager
-                            .get_prompt(get_command)
-                            .await
-                            .map_err(|e| ChatError::Custom(e.to_string().into()))?;
+                        let prompts = match self.tool_manager.get_prompt(get_command).await {
+                            Ok(resp) => resp,
+                            Err(e) => {
+                                match e {
+                                    GetPromptError::AmbiguousPrompt(prompt_name, alt_msg) => {
+                                        queue!(
+                                            self.output,
+                                            style::Print("\n"),
+                                            style::SetForegroundColor(Color::Yellow),
+                                            style::Print("Prompt "),
+                                            style::SetForegroundColor(Color::Cyan),
+                                            style::Print(prompt_name),
+                                            style::SetForegroundColor(Color::Yellow),
+                                            style::Print(" is ambiguous. Use one of the following "),
+                                            style::SetForegroundColor(Color::Cyan),
+                                            style::Print(alt_msg),
+                                            style::SetForegroundColor(Color::Reset),
+                                        )?;
+                                    },
+                                    GetPromptError::PromptNotFound(prompt_name) => {
+                                        queue!(
+                                            self.output,
+                                            style::Print("\n"),
+                                            style::SetForegroundColor(Color::Yellow),
+                                            style::Print("Prompt "),
+                                            style::SetForegroundColor(Color::Cyan),
+                                            style::Print(prompt_name),
+                                            style::SetForegroundColor(Color::Yellow),
+                                            style::Print(" not found. Use "),
+                                            style::SetForegroundColor(Color::Cyan),
+                                            style::Print("/prompts list"),
+                                            style::SetForegroundColor(Color::Yellow),
+                                            style::Print(" to see available prompts.\n"),
+                                            style::SetForegroundColor(Color::Reset),
+                                        )?;
+                                    },
+                                    _ => return Err(ChatError::Custom(e.to_string().into())),
+                                }
+                                execute!(self.output, style::Print("\n"))?;
+                                return Ok(ChatState::PromptUser {
+                                    tool_uses: Some(tool_uses),
+                                    pending_tool_index,
+                                    skip_printing_tools: true,
+                                });
+                            },
+                        };
                         if let Some(err) = prompts.error {
                             // If we are running into error we should just display the error
                             // and abort.
