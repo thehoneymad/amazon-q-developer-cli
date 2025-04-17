@@ -224,13 +224,21 @@ pub enum PromptsSubcommand {
 
 impl PromptsSubcommand {
     const AVAILABLE_COMMANDS: &str = color_print::cstr! {"<cyan!>Available subcommands</cyan!>
-  <em>help</em>                                                     <black!>Show an explanation for the prompts command</black!>
-  <em>list [search word]</em>                                       <black!>List available prompts from a tool or show all available prompts</black!>"};
+  <em>help</em>                                                   <black!>Show an explanation for the prompts command</black!>
+  <em>list [search word]</em>                                     <black!>List available prompts from a tool or show all available prompts</black!>"};
     const BASE_COMMAND: &str = color_print::cstr! {"<cyan!>Usage: /prompts [SUBCOMMAND]</cyan!>
 
 <cyan!>Description</cyan!>
   Show the current set of reusuable prompts from the current fleet of mcp servers."};
-    const _PROMPTS_USAGE: &str = "/prompts list [prompt name]\n/tools prompts help";
+
+    fn usage_msg(header: impl AsRef<str>) -> String {
+        format!(
+            "{}\n\n{}\n\n{}",
+            header.as_ref(),
+            Self::BASE_COMMAND,
+            Self::AVAILABLE_COMMANDS
+        )
+    }
 
     pub fn help_text() -> String {
         color_print::cformat!(
@@ -241,9 +249,9 @@ Prompts are reusable templates that help you quickly access common workflows and
 These templates are provided by the mcp servers you have installed and configured.
 
 To actually retrieve a prompt, directly start with the following command (without prepending /prompt get):
-<em>@<<prompt name>> [--arg=value]</em>                      <black!>Retrieve prompt specified</black!>
+  <em>@<<prompt name>> [arg]</em>                                   <black!>Retrieve prompt specified</black!>
 Or if you prefer the long way:
-<em>/prompts get <<server name>> <<prompt>> [--arg=value]</em>    <black!>Retrieve prompt specified</black!>
+  <em>/prompts get <<prompt name>> [arg]</em>                       <black!>Retrieve prompt specified</black!>
 
 {}
 
@@ -619,7 +627,12 @@ impl Command {
                             let subcommand = Some(PromptsSubcommand::Get { get_command });
                             Self::Prompts { subcommand }
                         },
-                        Some(other) => return Err(format!("Unknown subcommand '{}'", other)),
+                        Some(other) => {
+                            return Err(PromptsSubcommand::usage_msg(format!(
+                                "Unknown subcommand '{}'\n",
+                                other
+                            )));
+                        },
                         None => Self::Prompts {
                             subcommand: Some(PromptsSubcommand::List {
                                 search_word: parts.get(2).map(|v| (*v).to_string()),

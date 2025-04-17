@@ -170,6 +170,7 @@ const WELCOME_TEXT: &str = color_print::cstr! {"
 <em>/tools</em>        <black!>View and manage tools and permissions</black!>
 <em>/issue</em>        <black!>Report an issue or make a feature request</black!>
 <em>/profile</em>      <black!>(Beta) Manage profiles for the chat session</black!>
+<em>/prompts</em>      <black!>View and retrieve a list of reusable prompts</black!>
 <em>/context</em>      <black!>(Beta) Manage context files for a profile</black!>
 <em>/compact</em>      <black!>Summarize the conversation to free up context space</black!>
 <em>/help</em>         <black!>Show the help dialogue</black!>
@@ -206,6 +207,10 @@ const HELP_TEXT: &str = color_print::cstr! {"
   <em>create</em>      <black!>Create a new profile</black!>
   <em>delete</em>      <black!>Delete a profile</black!>
   <em>rename</em>      <black!>Rename a profile</black!>
+<em>/prompts</em>      <black!>View and retrieve prompts</black!>
+  <em>help</em>        <black!>Show prompts help</black!>
+  <em>list</em>        <black!>List or search available prompts</black!>
+  <em>get</em>         <black!>Retrieve and send a prompt</black!>
 <em>/context</em>      <black!>Manage context files for the chat session</black!>
   <em>help</em>        <black!>Show context help</black!>
   <em>show</em>        <black!>Display current context rules configuration [--expand]</black!>
