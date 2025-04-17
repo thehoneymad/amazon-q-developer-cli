@@ -158,7 +158,7 @@ pub struct ToolManagerBuilder {
 }
 
 impl ToolManagerBuilder {
-    pub fn msp_server_config(mut self, config: McpServerConfig) -> Self {
+    pub fn mcp_server_config(mut self, config: McpServerConfig) -> Self {
         self.mcp_server_config.replace(config);
         self
     }
@@ -382,11 +382,11 @@ impl ToolManagerBuilder {
 /// A collection of information that is used for the following purposes:
 /// - Checking if prompt info cached is out of date
 /// - Retrieve new prompt info
-struct PromptBundle {
+pub struct PromptBundle {
     /// The server name from which the prompt is offered / exposed
-    server_name: String,
+    pub server_name: String,
     /// The prompt get (info with which a prompt is retrieved) cached
-    prompt_get: PromptGet,
+    pub prompt_get: PromptGet,
 }
 
 #[derive(Default)]
@@ -395,7 +395,7 @@ pub struct ToolManager {
     /// Cache for prompts collected from different servers
     /// Key: prompt name
     /// Value: a list of PromptBundle that has a prompt of this name
-    prompts: Arc<SyncRwLock<HashMap<String, Vec<PromptBundle>>>>,
+    pub prompts: Arc<SyncRwLock<HashMap<String, Vec<PromptBundle>>>>,
     loading_display_task: Option<std::thread::JoinHandle<Result<(), eyre::Report>>>,
     loading_status_sender: Option<std::sync::mpsc::Sender<LoadingMsg>>,
 }
@@ -677,30 +677,7 @@ impl ToolManager {
                 // Both of which means we would have to requery
                 (None, _, false) => {
                     has_retried = true;
-                    *prompts_wl = self.clients.iter().fold(
-                        HashMap::<String, Vec<PromptBundle>>::new(),
-                        |mut acc, (server_name, client)| {
-                            let prompt_gets = client.list_prompt_gets();
-                            let Ok(prompt_gets) = prompt_gets.read() else {
-                                tracing::error!("Error encountered while retrieving read lock for {prompt_name}");
-                                return acc;
-                            };
-                            for (prompt_name, prompt_get) in prompt_gets.iter() {
-                                acc.entry(prompt_name.to_string())
-                                    .and_modify(|bundles| {
-                                        bundles.push(PromptBundle {
-                                            server_name: server_name.to_owned(),
-                                            prompt_get: prompt_get.clone(),
-                                        });
-                                    })
-                                    .or_insert(vec![PromptBundle {
-                                        server_name: server_name.to_owned(),
-                                        prompt_get: prompt_get.clone(),
-                                    }]);
-                            }
-                            acc
-                        },
-                    );
+                    self.refresh_prompts(&mut prompts_wl)?;
                     maybe_bundles = prompts_wl.get(&prompt_name);
                     continue 'blk;
                 },
@@ -711,15 +688,32 @@ impl ToolManager {
         }
     }
 
-    #[allow(clippy::type_complexity)]
-    pub fn get_prompt_gets(&self) -> Vec<(&String, Arc<std::sync::RwLock<HashMap<String, PromptGet>>>)> {
-        self.clients
-            .iter()
-            .map(|(k, v)| {
-                let prompts = v.list_prompt_gets();
-                (k, prompts)
-            })
-            .collect()
+    pub fn refresh_prompts(&self, prompts_wl: &mut HashMap<String, Vec<PromptBundle>>) -> Result<(), GetPromptError> {
+        *prompts_wl = self.clients.iter().fold(
+            HashMap::<String, Vec<PromptBundle>>::new(),
+            |mut acc, (server_name, client)| {
+                let prompt_gets = client.list_prompt_gets();
+                let Ok(prompt_gets) = prompt_gets.read() else {
+                    tracing::error!("Error encountered while retrieving read lock");
+                    return acc;
+                };
+                for (prompt_name, prompt_get) in prompt_gets.iter() {
+                    acc.entry(prompt_name.to_string())
+                        .and_modify(|bundles| {
+                            bundles.push(PromptBundle {
+                                server_name: server_name.to_owned(),
+                                prompt_get: prompt_get.clone(),
+                            });
+                        })
+                        .or_insert(vec![PromptBundle {
+                            server_name: server_name.to_owned(),
+                            prompt_get: prompt_get.clone(),
+                        }]);
+                }
+                acc
+            },
+        );
+        Ok(())
     }
 }
 
@@ -831,7 +825,6 @@ mod tests {
 
         let all_bad_name = "@@@@@";
         let sanitized_all_bad_name = sanitize_server_name(all_bad_name.to_string(), &regex, &mut hasher);
-        println!("all bad name: {sanitized_all_bad_name}");
         assert!(regex.is_match(&sanitized_all_bad_name));
     }
 }

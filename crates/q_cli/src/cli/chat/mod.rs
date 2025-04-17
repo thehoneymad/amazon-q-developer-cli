@@ -16,6 +16,7 @@ use std::collections::{
     VecDeque,
 };
 use std::io::{
+    BufWriter,
     IsTerminal,
     Read,
     Write,
@@ -126,6 +127,7 @@ use tokio::signal::unix::{
 use tool_manager::{
     GetPromptError,
     McpServerConfig,
+    PromptBundle,
     ToolManager,
     ToolManagerBuilder,
 };
@@ -142,6 +144,7 @@ use tracing::{
     trace,
     warn,
 };
+use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 use winnow::Partial;
 use winnow::stream::Offset;
@@ -288,7 +291,7 @@ pub async fn chat(
     let (prompt_request_sender, prompt_request_receiver) = std::sync::mpsc::channel::<Option<String>>();
     let (prompt_response_sender, prompt_response_receiver) = std::sync::mpsc::channel::<Vec<String>>();
     let mut tool_manager = ToolManagerBuilder::default()
-        .msp_server_config(mcp_server_configs)
+        .mcp_server_config(mcp_server_configs)
         .prompt_list_sender(prompt_response_sender)
         .prompt_list_receiver(prompt_request_receiver)
         .build()?;
@@ -370,6 +373,8 @@ pub enum ChatError {
         "Tool approval required but --no-interactive was specified. Use --accept-all to automatically approve tools."
     )]
     NonInteractiveToolApproval,
+    #[error(transparent)]
+    GetPromptError(#[from] GetPromptError),
 }
 
 pub struct ChatContext<W: Write> {
@@ -1678,91 +1683,112 @@ where
                             Some(PromptsSubcommand::List { search_word }) => search_word,
                             _ => None,
                         };
-                        let prompt_infos = self.tool_manager.get_prompt_gets();
-                        for (server_name, prompts) in prompt_infos {
-                            let read_lock = prompts.read().map_err(|e| {
-                                ChatError::Custom(
-                                    format!("Poison error encountered while retrieving prompts: {}", e).into(),
-                                )
-                            })?;
-                            for (prompt_name, prompt) in read_lock.iter() {
-                                if let Some(ref p) = search_word {
-                                    if !(server_name.contains(p) || prompt_name.contains(p)) {
-                                        continue;
+                        let terminal_width = self.terminal_width();
+                        let mut prompts_wl = self.tool_manager.prompts.write().map_err(|e| {
+                            ChatError::Custom(
+                                format!("Poison error encountered while retrieving prompts: {}", e).into(),
+                            )
+                        })?;
+                        self.tool_manager.refresh_prompts(&mut prompts_wl)?;
+                        let mut longest_name = "";
+                        let arg_pos = {
+                            let optimal_case = UnicodeWidthStr::width(longest_name) + terminal_width / 4;
+                            if optimal_case > terminal_width {
+                                terminal_width / 3
+                            } else {
+                                optimal_case
+                            }
+                        };
+                        let prompts_by_server = prompts_wl.iter().fold(
+                            HashMap::<&String, Vec<&PromptBundle>>::new(),
+                            |mut acc, (prompt_name, bundles)| {
+                                if prompt_name.contains(search_word.as_deref().unwrap_or("")) {
+                                    if prompt_name.len() > longest_name.len() {
+                                        longest_name = prompt_name.as_str();
+                                    }
+                                    for bundle in bundles {
+                                        acc.entry(&bundle.server_name)
+                                            .and_modify(|b| b.push(bundle))
+                                            .or_insert(vec![bundle]);
                                     }
                                 }
-                                let full_prompt_name = format!("{server_name} {prompt_name}");
+                                acc
+                            },
+                        );
+                        let mut buf = Vec::<u8>::new();
+                        let mut buf_writer = BufWriter::new(&mut buf);
+                        for (i, (server_name, bundles)) in prompts_by_server.iter().enumerate() {
+                            if i > 0 {
+                                queue!(buf_writer, style::Print("\n"))?;
+                            }
+                            queue!(
+                                buf_writer,
+                                style::SetAttribute(Attribute::Bold),
+                                style::Print(server_name),
+                                style::Print(" (MCP):"),
+                                style::SetAttribute(Attribute::Reset),
+                                style::Print("\n"),
+                            )?;
+                            for bundle in bundles {
                                 queue!(
-                                    self.output,
-                                    style::Print("\n"),
-                                    style::SetForegroundColor(Color::Cyan),
-                                    style::Print(full_prompt_name),
-                                    style::SetForegroundColor(Color::Reset),
+                                    buf_writer,
+                                    style::Print("- "),
+                                    style::Print(&bundle.prompt_get.name),
+                                    style::Print({
+                                        if let Some(args) = &bundle.prompt_get.arguments {
+                                            if !args.is_empty() {
+                                                let name_width =
+                                                    UnicodeWidthStr::width(bundle.prompt_get.name.as_str());
+                                                let padding =
+                                                    arg_pos.saturating_sub(name_width) - UnicodeWidthStr::width("- ");
+                                                " ".repeat(padding)
+                                            } else {
+                                                "\n".to_owned()
+                                            }
+                                        } else {
+                                            "\n".to_owned()
+                                        }
+                                    })
                                 )?;
-                                if let Some(ref desc) = prompt.description {
-                                    queue!(
-                                        self.output,
-                                        style::Print("\n"),
-                                        style::SetAttribute(Attribute::Bold),
-                                        style::Print("description: "),
-                                        style::SetAttribute(Attribute::Reset),
-                                        style::SetForegroundColor(Color::DarkGrey),
-                                        style::Print(desc),
-                                        style::SetForegroundColor(Color::Reset),
-                                    )?;
-                                }
-                                if let Some(ref args) = prompt.arguments {
-                                    queue!(
-                                        self.output,
-                                        style::SetAttribute(Attribute::Bold),
-                                        style::Print("\n"),
-                                        style::Print("arguments:"),
-                                        style::SetAttribute(Attribute::Reset),
-                                    )?;
-                                    for arg in args {
+                                if let Some(args) = bundle.prompt_get.arguments.as_ref() {
+                                    for (i, arg) in args.iter().enumerate() {
                                         queue!(
-                                            self.output,
-                                            style::SetAttribute(Attribute::Bold),
-                                            style::SetForegroundColor(Color::Yellow),
-                                            style::Print("\nname: "),
-                                            style::SetForegroundColor(Color::Reset),
-                                            style::SetAttribute(Attribute::Reset),
+                                            buf_writer,
                                             style::SetForegroundColor(Color::DarkGrey),
-                                            style::Print(&arg.name),
+                                            style::Print(match arg.required {
+                                                Some(true) => format!("{}*", arg.name),
+                                                _ => arg.name.clone(),
+                                            }),
                                             style::SetForegroundColor(Color::Reset),
-                                            style::Print("\n"),
+                                            style::Print(if i < args.len() - 1 { ", " } else { "\n" }),
                                         )?;
-                                        if let Some(ref desc) = arg.description {
-                                            queue!(
-                                                self.output,
-                                                style::SetAttribute(Attribute::Bold),
-                                                style::Print("description: "),
-                                                style::SetAttribute(Attribute::Reset),
-                                                style::SetForegroundColor(Color::DarkGrey),
-                                                style::Print(desc),
-                                                style::SetForegroundColor(Color::Reset)
-                                            )?;
-                                        }
-                                        if let Some(ref required) = arg.required {
-                                            queue!(
-                                                self.output,
-                                                style::Print("\n"),
-                                                style::SetAttribute(Attribute::Bold),
-                                                style::Print("required: "),
-                                                style::SetAttribute(Attribute::Reset),
-                                                style::SetForegroundColor(Color::DarkGrey),
-                                                style::Print(if *required { "true" } else { "false" }),
-                                                style::SetForegroundColor(Color::Reset)
-                                            )?;
-                                        }
                                     }
                                 }
-                                queue!(self.output, style::Print("\n"))?;
                             }
                         }
+                        buf_writer.flush()?;
+                        drop(buf_writer);
+                        queue!(
+                            self.output,
+                            style::Print("\n"),
+                            style::SetAttribute(Attribute::Bold),
+                            style::Print("Prompt"),
+                            style::SetAttribute(Attribute::Reset),
+                            style::Print({
+                                let name_width = UnicodeWidthStr::width("Prompt");
+                                let padding = arg_pos.saturating_sub(name_width);
+                                " ".repeat(padding)
+                            }),
+                            style::SetAttribute(Attribute::Bold),
+                            style::Print("Arguments (* = required)"),
+                            style::SetAttribute(Attribute::Reset),
+                            style::Print("\n"),
+                            style::Print(format!("{}\n", "▔".repeat(terminal_width))),
+                            style::Print(String::from_utf8_lossy(&buf)),
+                        )?;
                     },
                 }
-                execute!(self.output, style::Print("\n\n"))?;
+                execute!(self.output, style::Print("\n"))?;
                 ChatState::PromptUser {
                     tool_uses: Some(tool_uses),
                     pending_tool_index,
