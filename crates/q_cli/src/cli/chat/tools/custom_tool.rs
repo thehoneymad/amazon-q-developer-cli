@@ -39,6 +39,12 @@ pub struct CustomToolConfig {
     pub args: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
+    #[serde(default = "default_timeout")]
+    pub timeout: u64,
+}
+
+fn default_timeout() -> u64 {
+    120
 }
 
 #[derive(Debug)]
@@ -53,12 +59,17 @@ pub enum CustomToolClient {
 impl CustomToolClient {
     // TODO: add support for http transport
     pub fn from_config(server_name: String, config: CustomToolConfig) -> Result<Self> {
-        let CustomToolConfig { command, args, env } = config;
+        let CustomToolConfig {
+            command,
+            args,
+            env,
+            timeout,
+        } = config;
         let mcp_client_config = McpClientConfig {
             server_name: server_name.clone(),
             bin_path: command.clone(),
             args,
-            timeout: 120,
+            timeout,
             // TODO: some of this isn't really up to the consumer.
             // We need to have this defined in the mcp client crate.
             init_params: serde_json::json!({
@@ -114,7 +125,7 @@ impl CustomToolClient {
 
     pub fn list_prompt_gets(&self) -> Arc<std::sync::RwLock<HashMap<String, PromptGet>>> {
         match self {
-            CustomToolClient::Stdio { client, .. } => client.list_prompt_gets(),
+            CustomToolClient::Stdio { client, .. } => client.prompt_gets.clone(),
         }
     }
 

@@ -86,7 +86,7 @@ pub struct Client<T: Transport> {
     server_process_id: Option<Pid>,
     init_params: serde_json::Value,
     current_id: Arc<AtomicU64>,
-    prompt_gets: Arc<SyncRwLock<HashMap<String, PromptGet>>>,
+    pub prompt_gets: Arc<SyncRwLock<HashMap<String, PromptGet>>>,
     pub is_prompts_out_of_date: Arc<AtomicBool>,
 }
 
@@ -308,10 +308,6 @@ where
         }
 
         Ok(serde_json::to_value(server_capabilities)?)
-    }
-
-    pub fn list_prompt_gets(&self) -> Arc<SyncRwLock<HashMap<String, PromptGet>>> {
-        self.prompt_gets.clone()
     }
 
     /// Sends a request to the server associated.
