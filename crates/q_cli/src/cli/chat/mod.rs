@@ -16,7 +16,6 @@ use std::collections::{
     VecDeque,
 };
 use std::io::{
-    BufWriter,
     IsTerminal,
     Read,
     Write,
@@ -1704,6 +1703,23 @@ where
                                 optimal_case
                             }
                         };
+                        queue!(
+                            self.output,
+                            style::Print("\n"),
+                            style::SetAttribute(Attribute::Bold),
+                            style::Print("Prompt"),
+                            style::SetAttribute(Attribute::Reset),
+                            style::Print({
+                                let name_width = UnicodeWidthStr::width("Prompt");
+                                let padding = arg_pos.saturating_sub(name_width);
+                                " ".repeat(padding)
+                            }),
+                            style::SetAttribute(Attribute::Bold),
+                            style::Print("Arguments (* = required)"),
+                            style::SetAttribute(Attribute::Reset),
+                            style::Print("\n"),
+                            style::Print(format!("{}\n", "▔".repeat(terminal_width))),
+                        )?;
                         let prompts_by_server = prompts_wl.iter().fold(
                             HashMap::<&String, Vec<&PromptBundle>>::new(),
                             |mut acc, (prompt_name, bundles)| {
@@ -1720,14 +1736,12 @@ where
                                 acc
                             },
                         );
-                        let mut buf = Vec::<u8>::new();
-                        let mut buf_writer = BufWriter::new(&mut buf);
                         for (i, (server_name, bundles)) in prompts_by_server.iter().enumerate() {
                             if i > 0 {
-                                queue!(buf_writer, style::Print("\n"))?;
+                                queue!(self.output, style::Print("\n"))?;
                             }
                             queue!(
-                                buf_writer,
+                                self.output,
                                 style::SetAttribute(Attribute::Bold),
                                 style::Print(server_name),
                                 style::Print(" (MCP):"),
@@ -1736,7 +1750,7 @@ where
                             )?;
                             for bundle in bundles {
                                 queue!(
-                                    buf_writer,
+                                    self.output,
                                     style::Print("- "),
                                     style::Print(&bundle.prompt_get.name),
                                     style::Print({
@@ -1758,7 +1772,7 @@ where
                                 if let Some(args) = bundle.prompt_get.arguments.as_ref() {
                                     for (i, arg) in args.iter().enumerate() {
                                         queue!(
-                                            buf_writer,
+                                            self.output,
                                             style::SetForegroundColor(Color::DarkGrey),
                                             style::Print(match arg.required {
                                                 Some(true) => format!("{}*", arg.name),
@@ -1771,26 +1785,6 @@ where
                                 }
                             }
                         }
-                        buf_writer.flush()?;
-                        drop(buf_writer);
-                        queue!(
-                            self.output,
-                            style::Print("\n"),
-                            style::SetAttribute(Attribute::Bold),
-                            style::Print("Prompt"),
-                            style::SetAttribute(Attribute::Reset),
-                            style::Print({
-                                let name_width = UnicodeWidthStr::width("Prompt");
-                                let padding = arg_pos.saturating_sub(name_width);
-                                " ".repeat(padding)
-                            }),
-                            style::SetAttribute(Attribute::Bold),
-                            style::Print("Arguments (* = required)"),
-                            style::SetAttribute(Attribute::Reset),
-                            style::Print("\n"),
-                            style::Print(format!("{}\n", "▔".repeat(terminal_width))),
-                            style::Print(String::from_utf8_lossy(&buf)),
-                        )?;
                     },
                 }
                 execute!(self.output, style::Print("\n"))?;
