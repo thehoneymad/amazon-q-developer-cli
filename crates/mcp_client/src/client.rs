@@ -149,7 +149,7 @@ impl Client<StdioTransport> {
             init_params,
             current_id: Arc::new(AtomicU64::new(0)),
             prompt_gets: Arc::new(SyncRwLock::new(HashMap::new())),
-            is_prompts_out_of_date: Arc::new(AtomicBool::new(true)),
+            is_prompts_out_of_date: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -266,6 +266,7 @@ where
         if let Some(res) = &server_capabilities.result {
             if let Some(cap) = res.get("capabilities") {
                 if cap.get("prompts").is_some() {
+                    self.is_prompts_out_of_date.store(true, Ordering::Relaxed);
                     let client_ref = (*self).clone();
                     tokio::spawn(async move {
                         let Ok(resp) = client_ref.request("prompts/list", None).await else {
