@@ -1754,16 +1754,16 @@ where
                                     style::Print("- "),
                                     style::Print(&bundle.prompt_get.name),
                                     style::Print({
-                                        if let Some(args) = &bundle.prompt_get.arguments {
-                                            if !args.is_empty() {
-                                                let name_width =
-                                                    UnicodeWidthStr::width(bundle.prompt_get.name.as_str());
-                                                let padding =
-                                                    arg_pos.saturating_sub(name_width) - UnicodeWidthStr::width("- ");
-                                                " ".repeat(padding)
-                                            } else {
-                                                "\n".to_owned()
-                                            }
+                                        if bundle
+                                            .prompt_get
+                                            .arguments
+                                            .as_ref()
+                                            .is_some_and(|args| !args.is_empty())
+                                        {
+                                            let name_width = UnicodeWidthStr::width(bundle.prompt_get.name.as_str());
+                                            let padding =
+                                                arg_pos.saturating_sub(name_width) - UnicodeWidthStr::width("- ");
+                                            " ".repeat(padding)
                                         } else {
                                             "\n".to_owned()
                                         }

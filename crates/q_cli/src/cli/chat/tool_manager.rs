@@ -295,13 +295,19 @@ impl ToolManagerBuilder {
         let prompts = Arc::new(SyncRwLock::new(HashMap::default()));
         // TODO: accommodate hot reload of mcp servers
         if let (Some(sender), Some(receiver)) = (sender, receiver) {
-            let clients = Arc::new(clients.clone());
+            let clients = clients.iter().fold(HashMap::new(), |mut acc, (n, c)| {
+                acc.insert(n.to_string(), Arc::downgrade(c));
+                acc
+            });
             let prompts_clone = prompts.clone();
             tokio::task::spawn_blocking(move || {
                 let receiver = Arc::new(std::sync::Mutex::new(receiver));
                 loop {
                     let search_word = receiver.lock().map_err(|e| eyre::eyre!("{:?}", e))?.recv()?;
-                    if clients.iter().any(|(_, client)| client.is_prompts_out_of_date()) {
+                    if clients
+                        .values()
+                        .any(|client| client.upgrade().is_some_and(|c| c.is_prompts_out_of_date()))
+                    {
                         let mut prompts_wl = prompts_clone.write().map_err(|e| {
                             eyre::eyre!(
                                 "Error retrieving write lock on prompts for tab complete {}",
@@ -311,6 +317,9 @@ impl ToolManagerBuilder {
                         *prompts_wl = clients.iter().fold(
                             HashMap::<String, Vec<PromptBundle>>::new(),
                             |mut acc, (server_name, client)| {
+                                let Some(client) = client.upgrade() else {
+                                    return acc;
+                                };
                                 let prompt_gets = client.list_prompt_gets();
                                 let Ok(prompt_gets) = prompt_gets.read() else {
                                     tracing::error!("Error retrieving read lock for prompt gets for tab complete");
