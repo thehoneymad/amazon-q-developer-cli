@@ -181,7 +181,7 @@ impl ToolManagerBuilder {
             .into_iter()
             .map(|(server_name, server_config)| {
                 let snaked_cased_name = server_name.to_case(convert_case::Case::Snake);
-                let sanitized_server_name = sanitize_server_name(snaked_cased_name, &regex, &mut hasher);
+                let sanitized_server_name = sanitize_name(snaked_cased_name, &regex, &mut hasher);
                 let custom_tool_client = CustomToolClient::from_config(sanitized_server_name.clone(), server_config);
                 (sanitized_server_name, custom_tool_client)
             })
@@ -455,7 +455,7 @@ impl ToolManager {
                                             let msg = if name.len() > 64 {
                                                 "exceeded max length of 64"
                                             } else {
-                                                "must be complied with ^[a-zA-Z][a-zA-Z0-9_]*$"
+                                                "must be compliant with ^[a-zA-Z][a-zA-Z0-9_]*$"
                                             };
                                             acc.push_str(format!("  - {} ({})\n", name, msg).as_str());
                                             acc
@@ -726,14 +726,15 @@ impl ToolManager {
     }
 }
 
-fn sanitize_server_name(orig: String, regex: &regex::Regex, hasher: &mut impl Hasher) -> String {
-    if regex.is_match(&orig) {
+fn sanitize_name(orig: String, regex: &regex::Regex, hasher: &mut impl Hasher) -> String {
+    if regex.is_match(&orig) && !orig.contains(NAMESPACE_DELIMITER) {
         return orig;
     }
     let sanitized: String = orig
         .chars()
         .filter(|c| c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_')
-        .collect();
+        .collect::<String>()
+        .replace(NAMESPACE_DELIMITER, "");
     if sanitized.is_empty() {
         hasher.write(orig.as_bytes());
         let hash = format!("{:03}", hasher.finish() % 1000);
@@ -825,15 +826,19 @@ mod tests {
         let regex = regex::Regex::new(VALID_TOOL_NAME).unwrap();
         let mut hasher = DefaultHasher::new();
         let orig_name = "@awslabs.cdk-mcp-server";
-        let sanitized_server_name = sanitize_server_name(orig_name.to_string(), &regex, &mut hasher);
+        let sanitized_server_name = sanitize_name(orig_name.to_string(), &regex, &mut hasher);
         assert_eq!(sanitized_server_name, "awslabscdkmcpserver");
 
         let orig_name = "good_name";
-        let sanitized_good_name = sanitize_server_name(orig_name.to_string(), &regex, &mut hasher);
-        assert_eq!(sanitized_good_name, orig_name.to_string());
+        let sanitized_good_name = sanitize_name(orig_name.to_string(), &regex, &mut hasher);
+        assert_eq!(sanitized_good_name, orig_name);
 
         let all_bad_name = "@@@@@";
-        let sanitized_all_bad_name = sanitize_server_name(all_bad_name.to_string(), &regex, &mut hasher);
+        let sanitized_all_bad_name = sanitize_name(all_bad_name.to_string(), &regex, &mut hasher);
         assert!(regex.is_match(&sanitized_all_bad_name));
+
+        let with_delim = format!("a{}b{}c", NAMESPACE_DELIMITER, NAMESPACE_DELIMITER);
+        let sanitized = sanitize_name(with_delim, &regex, &mut hasher);
+        assert_eq!(sanitized, "abc");
     }
 }
