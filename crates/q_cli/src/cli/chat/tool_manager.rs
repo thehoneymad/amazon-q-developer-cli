@@ -93,6 +93,9 @@ enum LoadingMsg {
     /// Represents an error that occurred during tool initialization.
     /// Contains the name of the server that failed to initialize and the error message.
     Error { name: String, msg: eyre::Report },
+    /// Represents a warning that occurred during tool initialization.
+    /// Contains the name of the server that generated the warning and the warning message.
+    Warn { name: String, msg: eyre::Report },
 }
 
 /// Represents the state of a loading indicator for a tool being initialized.
@@ -241,11 +244,24 @@ impl ToolManagerBuilder {
                                 cursor::MoveUp(1),
                                 terminal::Clear(terminal::ClearType::CurrentLine),
                             )?;
-                            let fail_load_msg = msg.to_string();
-                            let fail_load_msg = eyre::eyre!(fail_load_msg);
+                            let fail_load_msg = eyre::eyre!(msg.to_string());
                             queue_failure_message(&name, &fail_load_msg, &mut stdout_lock)?;
                             let total = loading_servers.len();
                             queue_init_message(spinner_logo_idx, complete, failed, total, &mut stdout_lock)?;
+                        },
+                        LoadingMsg::Warn { name, msg } => {
+                            complete += 1;
+                            execute!(
+                                stdout_lock,
+                                cursor::MoveToColumn(0),
+                                cursor::MoveUp(1),
+                                terminal::Clear(terminal::ClearType::CurrentLine),
+                            )?;
+                            let msg = eyre::eyre!(msg.to_string());
+                            queue_warn_message(&name, &msg, &mut stdout_lock)?;
+                            let total = loading_servers.len();
+                            queue_init_message(spinner_logo_idx, complete, failed, total, &mut stdout_lock)?;
+                            stdout_lock.flush()?;
                         },
                     },
                     Err(RecvTimeoutError::Timeout) => {
@@ -383,6 +399,7 @@ impl ToolManagerBuilder {
             prompts,
             loading_display_task,
             loading_status_sender,
+            ..Default::default()
         })
     }
 }
@@ -407,6 +424,7 @@ pub struct ToolManager {
     pub prompts: Arc<SyncRwLock<HashMap<String, Vec<PromptBundle>>>>,
     loading_display_task: Option<std::thread::JoinHandle<Result<(), eyre::Report>>>,
     loading_status_sender: Option<std::sync::mpsc::Sender<LoadingMsg>>,
+    pub tn_map: HashMap<String, String>,
 }
 
 impl ToolManager {
@@ -429,31 +447,43 @@ impl ToolManager {
                 let tool_specs_clone = tool_specs.clone();
                 async move {
                     let tool_spec = client_clone.init().await;
+                    let mut sanitized_mapping = HashMap::<String, String>::new();
                     match tool_spec {
-                        Ok((name, specs)) => {
+                        Ok((server_name, specs)) => {
                             // Each mcp server might have multiple tools.
                             // To avoid naming conflicts we are going to namespace it.
                             // This would also help us locate which mcp server to call the tool from.
                             let mut out_of_spec_tool_names = Vec::<String>::new();
+                            let mut hasher = DefaultHasher::new();
                             for mut spec in specs {
-                                if !regex_clone.is_match(&spec.name) {
-                                    out_of_spec_tool_names.push(spec.name.clone());
+                                let sn  = if !regex_clone.is_match(&spec.name) {
+                                    let mut sn = sanitize_name(spec.name.clone(), &regex_clone, &mut hasher);
+                                    while sanitized_mapping.contains_key(&sn) {
+                                        sn.push('1');
+                                    }
+                                    sn
+                                } else {
+                                    spec.name.clone()
+                                };
+                                let full_name = format!("{}{}{}", server_name, NAMESPACE_DELIMITER, sn);
+                                if full_name.len() > 64 {
+                                    out_of_spec_tool_names.push(spec.name);
                                     continue;
                                 }
-                                spec.name = format!("{}{}{}", name, NAMESPACE_DELIMITER, spec.name);
-                                if spec.name.len() > 64 {
-                                    out_of_spec_tool_names.push(spec.name.clone());
-                                    continue;
+                                if sn != spec.name {
+                                    sanitized_mapping.insert(full_name.clone(), format!("{}{}{}", server_name, NAMESPACE_DELIMITER, spec.name));
                                 }
+                                spec.name = full_name;
                                 tool_specs_clone.lock().await.insert(spec.name.clone(), spec);
                             }
                             if let Some(tx_clone) = &tx_clone {
                                 let send_result = if !out_of_spec_tool_names.is_empty() {
+                                    let allowed_len = 64 - server_name.len();
                                     let msg = out_of_spec_tool_names.iter().fold(
                                         String::from("The following tool names are out of spec. They will be excluded from the list of available tools:\n"),
                                         |mut acc, name| {
-                                            let msg = if name.len() > 64 {
-                                                "exceeded max length of 64"
+                                            let msg = if name.len() > allowed_len {
+                                                "exceeded max length of 64 when combined with server name"
                                             } else {
                                                 "must be compliant with ^[a-zA-Z][a-zA-Z0-9_]*$"
                                             };
@@ -462,13 +492,22 @@ impl ToolManager {
                                         }
                                     );
                                     tx_clone.send(LoadingMsg::Error {
-                                        name: name.clone(),
+                                        name: server_name.clone(),
                                         msg: eyre::eyre!(msg),
                                     })
                                     // TODO: if no tools are valid, we need to offload the server
                                     // from the fleet (i.e. kill the server)
+                                } else if !sanitized_mapping.is_empty() {
+                                    let warn = sanitized_mapping.iter().fold(String::from("The following tool names are changed:\n"), |mut acc, (k, v)| {
+                                        acc.push_str(format!(" - {} -> {}\n", v, k).as_str());
+                                        acc
+                                    });
+                                    tx_clone.send(LoadingMsg::Warn {
+                                        name: server_name.clone(),
+                                        msg: eyre::eyre!(warn),
+                                    })
                                 } else {
-                                    tx_clone.send(LoadingMsg::Done(name.clone()))
+                                    tx_clone.send(LoadingMsg::Done(server_name.clone()))
                                 };
                                 if let Err(e) = send_result {
                                     error!("Error while sending status update to display task: {:?}", e);
@@ -487,16 +526,22 @@ impl ToolManager {
                             }
                         },
                     }
-                    Ok::<(), eyre::Report>(())
+                    Ok::<_, eyre::Report>(Some(sanitized_mapping))
                 }
             })
             .collect::<Vec<_>>();
         // TODO: do we want to introduce a timeout here?
-        stream::iter(load_tool)
+        self.tn_map = stream::iter(load_tool)
             .map(|async_closure| tokio::task::spawn(async_closure))
             .buffer_unordered(20)
             .collect::<Vec<_>>()
-            .await;
+            .await
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .filter_map(|r| r.ok())
+            .flatten()
+            .flatten()
+            .collect::<HashMap<_, _>>();
         drop(tx);
         if let Some(display_task) = display_task {
             if let Err(e) = display_task.join() {
@@ -528,6 +573,7 @@ impl ToolManager {
             "report_issue" => Tool::GhIssue(serde_json::from_value::<GhIssue>(value.args).map_err(map_err)?),
             // Note that this name is namespaced with server_name{DELIMITER}tool_name
             name => {
+                let name = self.tn_map.get(name).map_or(name, String::as_str);
                 let (server_name, tool_name) = name.split_once(NAMESPACE_DELIMITER).ok_or(ToolResult {
                     tool_use_id: value.id.clone(),
                     content: vec![ToolResultContentBlock::Text(format!(
@@ -813,6 +859,20 @@ fn queue_failure_message(name: &str, fail_load_msg: &eyre::Report, output: &mut 
         style::ResetColor,
         style::Print(" has failed to load:\n"),
         style::Print(fail_load_msg),
+        style::ResetColor,
+    )?)
+}
+
+fn queue_warn_message(name: &str, msg: &eyre::Report, output: &mut impl Write) -> eyre::Result<()> {
+    Ok(queue!(
+        output,
+        style::SetForegroundColor(style::Color::Yellow),
+        style::Print("⚠ "),
+        style::SetForegroundColor(style::Color::Blue),
+        style::Print(name),
+        style::ResetColor,
+        style::Print(" has the following warning:\n"),
+        style::Print(msg),
         style::ResetColor,
     )?)
 }
