@@ -41,6 +41,7 @@ use super::summarization_state::{
 };
 use super::tools::{
     QueuedTool,
+    ToolOrigin,
     ToolSpec,
 };
 use super::truncate_safe;
@@ -73,7 +74,7 @@ pub struct ConversationState {
     /// e.g user messages prefixed with '> '. Should also be used to store errors posted in the
     /// chat.
     pub transcript: VecDeque<String>,
-    pub tools: Vec<Tool>,
+    pub tools: HashMap<ToolOrigin, Vec<Tool>>,
     /// Context manager for handling sticky context files
     pub context_manager: Option<ContextManager>,
     /// Cached value representing the length of the user context message.
@@ -111,14 +112,17 @@ impl ConversationState {
             transcript: VecDeque::with_capacity(MAX_CONVERSATION_STATE_HISTORY_LEN),
             tools: tool_config
                 .into_values()
-                .map(|v| {
-                    Tool::ToolSpecification(ToolSpecification {
+                .fold(HashMap::<ToolOrigin, Vec<Tool>>::new(), |mut acc, v| {
+                    let tool = Tool::ToolSpecification(ToolSpecification {
                         name: v.name,
                         description: v.description,
                         input_schema: v.input_schema.into(),
-                    })
-                })
-                .collect(),
+                    });
+                    acc.entry(v.tool_origin)
+                        .and_modify(|tools| tools.push(tool.clone()))
+                        .or_insert(vec![tool]);
+                    acc
+                }),
             context_manager,
             context_message_length: None,
             latest_summary: None,
@@ -152,7 +156,7 @@ impl ConversationState {
                             tools: if self.tools.is_empty() {
                                 None
                             } else {
-                                Some(self.tools.clone())
+                                Some(self.tools.values().flatten().cloned().collect::<Vec<Tool>>())
                             },
                             ..Default::default()
                         }),
@@ -194,7 +198,7 @@ impl ConversationState {
                 tools: if self.tools.is_empty() {
                     None
                 } else {
-                    Some(self.tools.clone())
+                    Some(self.tools.values().flatten().cloned().collect::<Vec<Tool>>())
                 },
                 ..Default::default()
             }),
@@ -338,7 +342,7 @@ impl ConversationState {
                         tools: if self.tools.is_empty() {
                             None
                         } else {
-                            Some(self.tools.clone())
+                            Some(self.tools.values().flatten().cloned().collect::<Vec<Tool>>())
                         },
                         ..Default::default()
                     };
@@ -358,7 +362,7 @@ impl ConversationState {
             tools: if self.tools.is_empty() {
                 None
             } else {
-                Some(self.tools.clone())
+                Some(self.tools.values().flatten().cloned().collect::<Vec<Tool>>())
             },
             ..Default::default()
         };
@@ -390,7 +394,7 @@ impl ConversationState {
             tools: if self.tools.is_empty() {
                 None
             } else {
-                Some(self.tools.clone())
+                Some(self.tools.values().flatten().cloned().collect::<Vec<Tool>>())
             },
             ..Default::default()
         };

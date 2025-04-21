@@ -42,7 +42,6 @@ use tracing::error;
 
 use super::command::PromptsGetCommand;
 use super::parser::ToolUse;
-use super::tools::Tool;
 use super::tools::custom_tool::{
     CustomToolClient,
     CustomToolConfig,
@@ -52,6 +51,10 @@ use super::tools::fs_read::FsRead;
 use super::tools::fs_write::FsWrite;
 use super::tools::gh_issue::GhIssue;
 use super::tools::use_aws::UseAws;
+use super::tools::{
+    Tool,
+    ToolOrigin,
+};
 use crate::cli::chat::tools::ToolSpec;
 use crate::cli::chat::tools::custom_tool::CustomTool;
 
@@ -474,6 +477,7 @@ impl ToolManager {
                                     sanitized_mapping.insert(full_name.clone(), format!("{}{}{}", server_name, NAMESPACE_DELIMITER, spec.name));
                                 }
                                 spec.name = full_name;
+                                spec.tool_origin = ToolOrigin::McpServer(server_name.clone());
                                 tool_specs_clone.lock().await.insert(spec.name.clone(), spec);
                             }
                             if let Some(tx_clone) = &tx_clone {

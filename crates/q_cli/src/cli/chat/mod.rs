@@ -777,7 +777,7 @@ where
         // Require two consecutive sigint's to exit.
         let mut ctrl_c = false;
         let user_input = loop {
-            let all_tools_trusted = self.conversation_state.tools.iter().all(|t| match t {
+            let all_tools_trusted = self.conversation_state.tools.values().flatten().all(|t| match t {
                 FigTool::ToolSpecification(t) => self.tool_permissions.is_trusted(&t.name),
             });
 
@@ -1509,12 +1509,11 @@ where
                         )?;
                     },
                     Some(ToolsSubcommand::TrustAll) => {
-                        self.conversation_state
-                            .tools
-                            .iter()
-                            .for_each(|FigTool::ToolSpecification(spec)| {
+                        self.conversation_state.tools.values().flatten().for_each(
+                            |FigTool::ToolSpecification(spec)| {
                                 self.tool_permissions.trust_tool(spec.name.as_str());
-                            });
+                            },
+                        );
                         queue!(
                             self.output,
                             style::SetForegroundColor(Color::Green),
@@ -1545,48 +1544,63 @@ where
                     },
                     None => {
                         // No subcommand - print the current tools and their permissions.
-
                         // Determine how to format the output nicely.
+                        let terminal_width = self.terminal_width();
                         let longest = self
                             .conversation_state
                             .tools
-                            .iter()
+                            .values()
+                            .flatten()
                             .map(|FigTool::ToolSpecification(spec)| spec.name.len())
                             .max()
                             .unwrap_or(0);
 
-                        let tool_permissions: Vec<String> = self
-                            .conversation_state
-                            .tools
-                            .iter()
-                            .map(|FigTool::ToolSpecification(spec)| {
-                                let width = longest - spec.name.len() + 4;
-                                format!(
-                                    "- {}{:>width$}{}",
-                                    spec.name,
-                                    "",
-                                    self.tool_permissions.display_label(&spec.name),
-                                    width = width
-                                )
-                            })
-                            .collect();
-
                         queue!(
                             self.output,
-                            style::SetForegroundColor(Color::Green),
-                            style::Print("\nCurrent tool permissions:"),
-                            style::SetForegroundColor(Color::Reset),
-                            style::Print(format!("\n{}\n", tool_permissions.join("\n"))),
-                            style::SetForegroundColor(Color::Green),
-                            style::Print("\nUse /tools help to edit permissions."),
-                            style::SetForegroundColor(Color::Reset),
+                            style::Print("\n"),
+                            style::SetAttribute(Attribute::Bold),
+                            style::Print({
+                                // Adding 2 because of "- " preceding every tool name
+                                let width = longest + 2 - "Tool".len() + 4;
+                                format!("Tool{:>width$}Permission", "", width = width)
+                            }),
+                            style::SetAttribute(Attribute::Reset),
+                            style::Print("\n"),
+                            style::Print("▔".repeat(terminal_width)),
                         )?;
+                        self.conversation_state.tools.iter().for_each(|(origin, tools)| {
+                            let to_display =
+                                tools
+                                    .iter()
+                                    .fold(String::new(), |mut acc, FigTool::ToolSpecification(spec)| {
+                                        let width = longest - spec.name.len() + 4;
+                                        acc.push_str(
+                                            format!(
+                                                "- {}{:>width$}{}\n",
+                                                spec.name,
+                                                "",
+                                                self.tool_permissions.display_label(&spec.name),
+                                                width = width
+                                            )
+                                            .as_str(),
+                                        );
+                                        acc
+                                    });
+                            let _ = queue!(
+                                self.output,
+                                style::SetAttribute(Attribute::Bold),
+                                style::Print(format!("{}:\n", origin)),
+                                style::SetAttribute(Attribute::Reset),
+                                style::Print(to_display),
+                                style::Print("\n")
+                            );
+                        });
                     },
                 };
 
                 // Put spacing between previous output as to not be overwritten by
                 // during PromptUser.
-                execute!(self.output, style::Print("\n\n"),)?;
+                self.output.flush()?;
 
                 ChatState::PromptUser {
                     tool_uses: Some(tool_uses),

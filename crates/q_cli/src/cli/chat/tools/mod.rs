@@ -195,6 +195,27 @@ pub struct ToolSpec {
     pub description: String,
     #[serde(alias = "inputSchema")]
     pub input_schema: InputSchema,
+    #[serde(default = "tool_origin")]
+    pub tool_origin: ToolOrigin,
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+pub enum ToolOrigin {
+    Native,
+    McpServer(String),
+}
+
+impl std::fmt::Display for ToolOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToolOrigin::Native => write!(f, "Built-in"),
+            ToolOrigin::McpServer(server) => write!(f, "{} (MCP)", server),
+        }
+    }
+}
+
+fn tool_origin() -> ToolOrigin {
+    ToolOrigin::Native
 }
 
 #[derive(Debug, Clone)]
