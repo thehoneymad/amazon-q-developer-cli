@@ -44,7 +44,7 @@ pub struct CustomToolConfig {
 }
 
 fn default_timeout() -> u64 {
-    120
+    120 * 1000
 }
 
 #[derive(Debug)]

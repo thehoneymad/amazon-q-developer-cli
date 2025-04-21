@@ -418,15 +418,33 @@ pub struct PromptBundle {
     pub prompt_get: PromptGet,
 }
 
+/// Manages the lifecycle and interactions with tools from various sources, including MCP servers.
+/// This struct is responsible for initializing tools, handling tool requests, and maintaining
+/// a cache of available prompts from connected servers.
 #[derive(Default)]
 pub struct ToolManager {
+    /// Map of server names to their corresponding client instances.
+    /// These clients are used to communicate with MCP servers.
     pub clients: HashMap<String, Arc<CustomToolClient>>,
-    /// Cache for prompts collected from different servers
+
+    /// Cache for prompts collected from different servers.
     /// Key: prompt name
-    /// Value: a list of PromptBundle that has a prompt of this name
+    /// Value: a list of PromptBundle that has a prompt of this name.
+    /// This cache helps resolve prompt requests efficiently and handles
+    /// cases where multiple servers offer prompts with the same name.
     pub prompts: Arc<SyncRwLock<HashMap<String, Vec<PromptBundle>>>>,
+
+    /// Handle to the thread that displays loading status for tool initialization.
+    /// This thread provides visual feedback to users during the tool loading process.
     loading_display_task: Option<std::thread::JoinHandle<Result<(), eyre::Report>>>,
+
+    /// Channel sender for communicating with the loading display thread.
+    /// Used to send status updates about tool initialization progress.
     loading_status_sender: Option<std::sync::mpsc::Sender<LoadingMsg>>,
+
+    /// Mapping from sanitized tool names to original tool names.
+    /// This is used to handle tool name transformations that may occur during initialization
+    /// to ensure tool names comply with naming requirements.
     pub tn_map: HashMap<String, String>,
 }
 
@@ -458,6 +476,15 @@ impl ToolManager {
                             // This would also help us locate which mcp server to call the tool from.
                             let mut out_of_spec_tool_names = Vec::<String>::new();
                             let mut hasher = DefaultHasher::new();
+                            // Sanitize tool names to ensure they comply with the naming requirements:
+                            // 1. If the name already matches the regex pattern and doesn't contain the namespace delimiter, use it as is
+                            // 2. Otherwise, remove invalid characters and handle special cases:
+                            //    - Remove namespace delimiters
+                            //    - Ensure the name starts with an alphabetic character
+                            //    - Generate a hash-based name if the sanitized result is empty
+                            // This ensures all tool names are valid identifiers that can be safely used in the system
+                            // If after all of the aforementioned modification the combined tool
+                            // name we have exceeds a length of 64, we surface it as an error
                             for mut spec in specs {
                                 let sn  = if !regex_clone.is_match(&spec.name) {
                                     let mut sn = sanitize_name(spec.name.clone(), &regex_clone, &mut hasher);

@@ -326,9 +326,9 @@ where
         };
         tracing::trace!(target: "mcp", "To {}:\n{:#?}", self.server_name, request);
         let msg = JsonRpcMessage::Request(request);
-        time::timeout(Duration::from_secs(self.timeout), self.transport.send(&msg)).await??;
+        time::timeout(Duration::from_millis(self.timeout), self.transport.send(&msg)).await??;
         let mut listener = self.transport.get_listener();
-        let mut resp = time::timeout(Duration::from_secs(self.timeout), async {
+        let mut resp = time::timeout(Duration::from_millis(self.timeout), async {
             // we want to ignore all other messages sent by the server at this point and let the
             // background loop handle them
             loop {
@@ -393,8 +393,8 @@ where
                         })),
                     };
                     let msg = JsonRpcMessage::Request(next_request);
-                    time::timeout(Duration::from_secs(self.timeout), self.transport.send(&msg)).await??;
-                    let resp = time::timeout(Duration::from_secs(self.timeout), async {
+                    time::timeout(Duration::from_millis(self.timeout), self.transport.send(&msg)).await??;
+                    let resp = time::timeout(Duration::from_millis(self.timeout), async {
                         // we want to ignore all other messages sent by the server at this point and let the
                         // background loop handle them
                         loop {
@@ -429,7 +429,7 @@ where
             params,
         };
         let msg = JsonRpcMessage::Notification(notification);
-        Ok(time::timeout(Duration::from_secs(self.timeout), self.transport.send(&msg)).await??)
+        Ok(time::timeout(Duration::from_millis(self.timeout), self.transport.send(&msg)).await??)
     }
 
     pub async fn shutdown(&self) -> Result<(), ClientError> {
