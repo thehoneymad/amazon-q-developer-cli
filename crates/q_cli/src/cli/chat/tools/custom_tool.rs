@@ -117,6 +117,12 @@ impl CustomToolClient {
         }
     }
 
+    pub fn get_server_name(&self) -> &str {
+        match self {
+            CustomToolClient::Stdio { server_name, .. } => server_name.as_str(),
+        }
+    }
+
     pub async fn request(&self, method: &str, params: Option<serde_json::Value>) -> Result<JsonRpcResponse> {
         match self {
             CustomToolClient::Stdio { client, .. } => Ok(client.request(method, params).await?),

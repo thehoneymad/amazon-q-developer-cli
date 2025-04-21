@@ -2395,10 +2395,22 @@ where
             style::SetForegroundColor(Color::Green),
             style::Print(format!("[Tool Request{}] ", if trusted { " - Trusted" } else { "" })),
             style::SetForegroundColor(Color::Cyan),
-            style::Print(format!("{}\n", tool_use.tool.display_name())),
-            style::SetForegroundColor(Color::Reset),
+            style::Print(tool_use.tool.display_name()),
+        )?;
+        if let Tool::Custom(ref tool) = tool_use.tool {
+            queue!(
+                self.output,
+                style::SetForegroundColor(Color::Reset),
+                style::Print(" from mcp server "),
+                style::SetForegroundColor(Color::Green),
+                style::SetForegroundColor(Color::Cyan),
+                style::Print(tool.client.get_server_name()),
+            )?;
+        }
+        queue!(
+            self.output,
             style::SetForegroundColor(Color::DarkGrey),
-            style::Print(format!("{}\n", "▔".repeat(terminal_width))),
+            style::Print(format!("\n{}\n", "▔".repeat(terminal_width))),
             style::SetForegroundColor(Color::Reset),
         )?;
         tool_use
