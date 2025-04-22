@@ -151,39 +151,31 @@ impl ConversationState {
         }
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn append_prompts(&mut self, mut _prompts: VecDeque<Prompt>) {
-        // while let Some(prompt) = prompts.pop_front() {
-        //     let Prompt { role, content } = prompt;
-        //     match role {
-        //         mcp_client::Role::User => {
-        //             let user_msg = UserInputMessage {
-        //                 content: content.into(),
-        //                 user_input_message_context: Some(UserInputMessageContext {
-        //                     shell_state: Some(build_shell_state()),
-        //                     env_state: Some(build_env_state()),
-        //                     tool_results: None,
-        //                     tools: if self.tools.is_empty() {
-        //                         None
-        //                     } else {
-        //
-        // Some(self.tools.values().flatten().cloned().collect::<Vec<Tool>>())
-        // },                     ..Default::default()
-        //                 }),
-        //                 user_intent: None,
-        //             };
-        //             self.history.push_back(ChatMessage::UserInputMessage(user_msg));
-        //         },
-        //         mcp_client::Role::Assistant => {
-        //             let assistant_msg = AssistantResponseMessage {
-        //                 message_id: None,
-        //                 tool_uses: None,
-        //                 content: content.into(),
-        //             };
-        //             self.push_assistant_message(assistant_msg);
-        //         },
-        //     }
-        // }
+    /// Appends a collection prompts into history and returns the last message in the collection.
+    /// It asserts that the collection ends with a prompt that assumes the role of user.
+    pub fn append_prompts(&mut self, mut prompts: VecDeque<Prompt>) -> Option<String> {
+        debug_assert!(self.next_message.is_none(), "next_message should not exist");
+        debug_assert!(prompts.back().is_some_and(|p| p.role == mcp_client::Role::User));
+        let last_msg = prompts.pop_back()?;
+        let (mut candidate_user, mut candidate_asst) = (None::<UserMessage>, None::<AssistantMessage>);
+        while let Some(prompt) = prompts.pop_front() {
+            let Prompt { role, content } = prompt;
+            match role {
+                mcp_client::Role::User => {
+                    let user_msg = UserMessage::new_prompt(content.to_string());
+                    candidate_user.replace(user_msg);
+                },
+                mcp_client::Role::Assistant => {
+                    let assistant_msg = AssistantMessage::new_response(None, content.into());
+                    candidate_asst.replace(assistant_msg);
+                },
+            }
+            if let (Some(user), Some(asst)) = (candidate_user.take(), candidate_asst.take()) {
+                self.append_assistant_transcript(&asst);
+                self.history.push_back((user, asst));
+            }
+        }
+        Some(last_msg.content.to_string())
     }
 
     pub fn next_user_message(&self) -> Option<&UserMessage> {
@@ -207,21 +199,6 @@ impl ConversationState {
             input
         };
 
-        // let msg = UserInputMessage {
-        //     content: input,
-        //     user_input_message_context: Some(UserInputMessageContext {
-        //         shell_state: Some(build_shell_state()),
-        //         env_state: Some(build_env_state()),
-        //         tool_results: None,
-        //         tools: if self.tools.is_empty() {
-        //             None
-        //         } else {
-        //             Some(self.tools.values().flatten().cloned().collect::<Vec<Tool>>())
-        //         },
-        //         ..Default::default()
-        //     }),
-        //     user_intent: None,
-        // };
         let msg = UserMessage::new_prompt(input);
         self.next_message = Some(msg);
     }

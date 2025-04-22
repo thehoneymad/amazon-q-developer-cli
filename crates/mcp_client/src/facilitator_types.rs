@@ -44,7 +44,7 @@ pub enum OpsConversionError {
     InvalidMethod,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 /// Role assumed for a particular message
 pub enum Role {

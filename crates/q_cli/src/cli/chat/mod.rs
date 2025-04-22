@@ -1268,14 +1268,11 @@ impl ChatContext {
                         return Ok(ChatState::ExecuteTools(tool_uses));
                     }
                 } else if !self.pending_prompts.is_empty() {
-                    let all_but_last = self
-                        .pending_prompts
-                        .drain(..self.pending_prompts.len() - 1)
-                        .collect::<VecDeque<_>>();
-                    if let Some(last) = self.pending_prompts.pop_back() {
-                        user_input = last.content.into();
-                        self.conversation_state.append_prompts(all_but_last);
-                    }
+                    let prompts = self.pending_prompts.drain(0..).collect();
+                    user_input = self
+                        .conversation_state
+                        .append_prompts(prompts)
+                        .ok_or(ChatError::Custom("Prompt append failed".into()))?;
                 }
 
                 // Otherwise continue with normal chat on 'n' or other responses
