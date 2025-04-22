@@ -35,7 +35,7 @@ use rustyline::{
 };
 use winnow::stream::AsChar;
 
-const COMMANDS: &[&str] = &[
+pub const COMMANDS: &[&str] = &[
     "/clear",
     "/help",
     "/editor",
@@ -67,6 +67,7 @@ const COMMANDS: &[&str] = &[
     "/compact",
     "/compact help",
     "/compact --summary",
+    "/usage",
 ];
 
 pub fn generate_prompt(current_profile: Option<&str>, warning: bool) -> String {

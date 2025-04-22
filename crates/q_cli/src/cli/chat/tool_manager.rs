@@ -41,7 +41,7 @@ use tokio::sync::Mutex;
 use tracing::error;
 
 use super::command::PromptsGetCommand;
-use super::parser::ToolUse;
+use super::message::AssistantToolUse;
 use super::tools::custom_tool::{
     CustomToolClient,
     CustomToolConfig,
@@ -587,7 +587,7 @@ impl ToolManager {
         Ok(tool_specs)
     }
 
-    pub fn get_tool_from_tool_use(&self, value: ToolUse) -> Result<Tool, ToolResult> {
+    pub fn get_tool_from_tool_use(&self, value: AssistantToolUse) -> Result<Tool, ToolResult> {
         let map_err = |parse_error| ToolResult {
             tool_use_id: value.id.clone(),
             content: vec![ToolResultContentBlock::Text(format!(

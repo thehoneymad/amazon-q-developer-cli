@@ -16,6 +16,7 @@ use aws_smithy_types::{
     Document,
     Number as SmithyNumber,
 };
+use crossterm::style::Stylize;
 use custom_tool::CustomTool;
 use execute_bash::ExecuteBash;
 use eyre::Result;
@@ -26,7 +27,7 @@ use gh_issue::GhIssue;
 use serde::Deserialize;
 use use_aws::UseAws;
 
-pub const MAX_TOOL_RESPONSE_SIZE: usize = 800000;
+use super::consts::MAX_TOOL_RESPONSE_SIZE;
 
 /// Represents an executable tool use.
 #[derive(Debug, Clone)]
@@ -43,25 +44,12 @@ impl Tool {
     /// The display name of a tool
     pub fn display_name(&self) -> String {
         match self {
-            Tool::FsRead(_) => "Read from filesystem",
-            Tool::FsWrite(_) => "Write to filesystem",
-            Tool::ExecuteBash(_) => "Execute shell command",
-            Tool::UseAws(_) => "Use AWS CLI",
+            Tool::FsRead(_) => "fs_read",
+            Tool::FsWrite(_) => "fs_write",
+            Tool::ExecuteBash(_) => "execute_bash",
+            Tool::UseAws(_) => "use_aws",
             Tool::Custom(custom_tool) => &custom_tool.name,
-            Tool::GhIssue(_) => "Prepare GitHub issue",
-        }
-        .to_owned()
-    }
-
-    // TODO: Remove, just roll with it for now ya?
-    pub fn display_name_action(&self) -> String {
-        match self {
-            Tool::FsRead(_) => "Reading from filesystem",
-            Tool::FsWrite(_) => "Writing to filesystem",
-            Tool::ExecuteBash(execute_bash) => return format!("Executing `{}`", execute_bash.command),
-            Tool::UseAws(_) => "Using AWS CLI",
-            Tool::Custom(custom_tool) => &custom_tool.name,
-            Tool::GhIssue(_) => "Preparing GitHub issue",
+            Tool::GhIssue(_) => "gh_issue",
         }
         .to_owned()
     }
@@ -143,9 +131,9 @@ impl ToolPermissions {
     pub fn display_label(&self, tool_name: &str) -> String {
         if self.has(tool_name) {
             if self.is_trusted(tool_name) {
-                "Trusted".to_string()
+                format!("  {}", "trusted".dark_green().bold())
             } else {
-                "Per-request".to_string()
+                format!("  {}", "not trusted".dark_grey())
             }
         } else {
             Self::default_permission_label(tool_name)
@@ -166,6 +154,10 @@ impl ToolPermissions {
         self.permissions.clear();
     }
 
+    pub fn reset_tool(&mut self, tool_name: &str) {
+        self.permissions.remove(tool_name);
+    }
+
     pub fn has(&self, tool_name: &str) -> bool {
         self.permissions.contains_key(tool_name)
     }
@@ -175,15 +167,15 @@ impl ToolPermissions {
     // This "static" way avoids needing to construct a tool instance.
     fn default_permission_label(tool_name: &str) -> String {
         let label = match tool_name {
-            "fs_read" => "Trusted",
-            "fs_write" => "Per-request",
-            "execute_bash" => "Write-only commands",
-            "use_aws" => "Write-only commands",
-            "report_issue" => "Trusted",
-            _ => "Per-request",
+            "fs_read" => "trusted".dark_green().bold(),
+            "fs_write" => "not trusted".dark_grey(),
+            "execute_bash" => "trust read-only commands".dark_grey(),
+            "use_aws" => "trust read-only commands".dark_grey(),
+            "report_issue" => "trusted".dark_green().bold(),
+            _ => "not trusted".dark_grey(),
         };
 
-        format!("{label} [Default] ")
+        format!("{} {label}", "*".reset())
     }
 }
 
@@ -271,6 +263,33 @@ pub fn serde_value_to_document(value: serde_json::Value) -> Document {
                 .map(|(k, v)| (k, serde_value_to_document(v)))
                 .collect::<_>(),
         ),
+    }
+}
+
+pub fn document_to_serde_value(value: Document) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Document::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(k, v)| (k, document_to_serde_value(v)))
+                .collect::<_>(),
+        ),
+        Document::Array(vec) => Value::Array(vec.clone().into_iter().map(document_to_serde_value).collect::<_>()),
+        Document::Number(number) => {
+            if let Ok(v) = TryInto::<u64>::try_into(number) {
+                Value::Number(v.into())
+            } else if let Ok(v) = TryInto::<i64>::try_into(number) {
+                Value::Number(v.into())
+            } else {
+                Value::Number(
+                    serde_json::Number::from_f64(number.to_f64_lossy())
+                        .unwrap_or(serde_json::Number::from_f64(0.0).expect("converting from 0.0 will not fail")),
+                )
+            }
+        },
+        Document::String(s) => serde_json::Value::String(s),
+        Document::Bool(b) => serde_json::Value::Bool(b),
+        Document::Null => serde_json::Value::Null,
     }
 }
 
