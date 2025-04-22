@@ -70,15 +70,9 @@ impl CustomToolClient {
             bin_path: command.clone(),
             args,
             timeout,
-            // TODO: some of this isn't really up to the consumer.
-            // We need to have this defined in the mcp client crate.
-            init_params: serde_json::json!({
-                 "protocolVersion": "2024-11-05",
-                 "capabilities": {},
-                 "clientInfo": {
-                   "name": "Q CLI Chat",
-                   "version": "1.0.0"
-                 }
+            client_info: serde_json::json!({
+               "name": "Q CLI Chat",
+               "version": "1.0.0"
             }),
             env,
         };
@@ -155,11 +149,19 @@ impl CustomToolClient {
     }
 }
 
+/// Represents a custom tool that can be invoked through the Model Context Protocol (MCP).
 #[derive(Clone, Debug)]
 pub struct CustomTool {
+    /// Actual tool name as recognized by its MCP server. This differs from the tool names as they
+    /// are seen by the model since they are not prefixed by its MCP server name.
     pub name: String,
+    /// Reference to the client that manages communication with the tool's server process.
     pub client: Arc<CustomToolClient>,
+    /// The method name to call on the tool's server, following the JSON-RPC convention.
+    /// This corresponds to a specific functionality provided by the tool.
     pub method: String,
+    /// Optional parameters to pass to the tool when invoking the method.
+    /// Structured as a JSON value to accommodate various parameter types and structures.
     pub params: Option<serde_json::Value>,
 }
 

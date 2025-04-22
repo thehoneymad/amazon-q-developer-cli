@@ -13,7 +13,10 @@ use std::time::Duration;
 
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
-use serde::Deserialize;
+use serde::{
+    Deserialize,
+    Serialize,
+};
 use thiserror::Error;
 use tokio::time;
 
@@ -42,7 +45,30 @@ use crate::{
 };
 
 pub type ServerCapabilities = serde_json::Value;
+pub type ClientInfo = serde_json::Value;
 pub type StdioTransport = JsonRpcStdioTransport;
+
+/// Represents the capabilities of a client in the Model Context Protocol.
+/// This structure is sent to the server during initialization to communicate
+/// what features the client supports and provide information about the client.
+/// When features are added to the client, these should be declared in the [From] trait implemented
+/// for the struct.
+#[derive(Default, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientCapabilities {
+    protocol_version: JsonRpcVersion,
+    capabilities: HashMap<String, serde_json::Value>,
+    client_info: serde_json::Value,
+}
+
+impl From<ClientInfo> for ClientCapabilities {
+    fn from(client_info: ClientInfo) -> Self {
+        ClientCapabilities {
+            client_info,
+            ..Default::default()
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct ClientConfig {
@@ -50,7 +76,7 @@ pub struct ClientConfig {
     pub bin_path: String,
     pub args: Vec<String>,
     pub timeout: u64,
-    pub init_params: serde_json::Value,
+    pub client_info: serde_json::Value,
     pub env: Option<HashMap<String, String>>,
 }
 
@@ -84,7 +110,7 @@ pub struct Client<T: Transport> {
     transport: Arc<T>,
     timeout: u64,
     server_process_id: Option<Pid>,
-    init_params: serde_json::Value,
+    client_info: serde_json::Value,
     current_id: Arc<AtomicU64>,
     pub prompt_gets: Arc<SyncRwLock<HashMap<String, PromptGet>>>,
     pub is_prompts_out_of_date: Arc<AtomicBool>,
@@ -99,7 +125,7 @@ impl<T: Transport> Clone for Client<T> {
             // Note that we cannot have an id for the clone because we would kill the original
             // process when we drop the clone
             server_process_id: None,
-            init_params: self.init_params.clone(),
+            client_info: self.client_info.clone(),
             current_id: self.current_id.clone(),
             prompt_gets: self.prompt_gets.clone(),
             is_prompts_out_of_date: self.is_prompts_out_of_date.clone(),
@@ -114,7 +140,7 @@ impl Client<StdioTransport> {
             bin_path,
             args,
             timeout,
-            init_params,
+            client_info,
             env,
         } = config;
         let child = {
@@ -146,7 +172,7 @@ impl Client<StdioTransport> {
             transport,
             timeout,
             server_process_id,
-            init_params,
+            client_info,
             current_id: Arc::new(AtomicU64::new(0)),
             prompt_gets: Arc::new(SyncRwLock::new(HashMap::new())),
             is_prompts_out_of_date: Arc::new(AtomicBool::new(false)),
@@ -242,16 +268,17 @@ where
                         tracing::trace!(target: "mcp", "{server_name} logged {}", msg);
                     },
                     Err(e) => {
-                        tracing::error!(
-                            "Error encounteredw while reading from stderr for {server_name}: {:?}",
-                            e
-                        );
+                        tracing::error!("Error encountered while reading from stderr for {server_name}: {:?}", e);
                     },
                 }
             }
         });
 
-        let server_capabilities = self.request("initialize", Some(self.init_params.clone())).await?;
+        let init_params = Some({
+            let client_cap = ClientCapabilities::from(self.client_info.clone());
+            serde_json::json!(client_cap)
+        });
+        let server_capabilities = self.request("initialize", init_params).await?;
         if let Err(e) = examine_server_capabilities(&server_capabilities) {
             return Err(ClientError::NegotiationError(format!(
                 "Client {} has failed to negotiate server capabilities with server: {:?}",
@@ -493,25 +520,16 @@ mod tests {
         println!("bin path: {}", bin_path.to_str().unwrap_or("no path found"));
 
         // Testing 2 concurrent sessions to make sure transport layer does not overlap.
-        let init_params_one = serde_json::json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {
-              "roots": {
-                "listChanged": true
-              },
-              "sampling": {}
-            },
-            "clientInfo": {
-              "name": "TestClientOne",
-              "version": "1.0.0"
-            }
+        let client_info_one = serde_json::json!({
+          "name": "TestClientOne",
+          "version": "1.0.0"
         });
         let client_config_one = ClientConfig {
             server_name: "test_tool".to_owned(),
             bin_path: bin_path.to_str().unwrap().to_string(),
             args: ["1".to_owned()].to_vec(),
-            timeout: 60,
-            init_params: init_params_one.clone(),
+            timeout: 120 * 1000,
+            client_info: client_info_one.clone(),
             env: {
                 let mut map = HashMap::<String, String>::new();
                 map.insert("ENV_ONE".to_owned(), "1".to_owned());
@@ -519,25 +537,16 @@ mod tests {
                 Some(map)
             },
         };
-        let init_params_two = serde_json::json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {
-              "roots": {
-                "listChanged": false
-              },
-              "sampling": {}
-            },
-            "clientInfo": {
-              "name": "TestClientTwo",
-              "version": "1.0.0"
-            }
+        let client_info_two = serde_json::json!({
+          "name": "TestClientTwo",
+          "version": "1.0.0"
         });
         let client_config_two = ClientConfig {
             server_name: "test_tool".to_owned(),
             bin_path: bin_path.to_str().unwrap().to_string(),
             args: ["2".to_owned()].to_vec(),
-            timeout: 60,
-            init_params: init_params_two.clone(),
+            timeout: 120 * 1000,
+            client_info: client_info_two.clone(),
             env: {
                 let mut map = HashMap::<String, String>::new();
                 map.insert("ENV_ONE".to_owned(), "1".to_owned());
@@ -547,15 +556,17 @@ mod tests {
         };
         let mut client_one = Client::<StdioTransport>::from_config(client_config_one).expect("Failed to create client");
         let mut client_two = Client::<StdioTransport>::from_config(client_config_two).expect("Failed to create client");
+        let client_one_cap = ClientCapabilities::from(client_info_one);
+        let client_two_cap = ClientCapabilities::from(client_info_two);
 
         let (res_one, res_two) = tokio::join!(
             time::timeout(
                 time::Duration::from_secs(5),
-                test_client_routine(&mut client_one, init_params_one)
+                test_client_routine(&mut client_one, serde_json::json!(client_one_cap))
             ),
             time::timeout(
                 time::Duration::from_secs(5),
-                test_client_routine(&mut client_two, init_params_two)
+                test_client_routine(&mut client_two, serde_json::json!(client_two_cap))
             )
         );
         let res_one = res_one.expect("Client one timed out");
