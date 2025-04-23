@@ -584,6 +584,12 @@ impl ToolManager {
                 Arc::try_unwrap(tool_specs).map_err(|e| eyre::eyre!("Error unwrapping arc for tool specs {:?}", e))?;
             mutex.into_inner()
         };
+        // caching the tool names for skim operations
+        for tool_name in tool_specs.keys() {
+            if !self.tn_map.contains_key(tool_name) {
+                self.tn_map.insert(tool_name.clone(), tool_name.clone());
+            }
+        }
         Ok(tool_specs)
     }
 

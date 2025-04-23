@@ -31,6 +31,7 @@ use super::{
     InvokeOutput,
     ToolSpec,
 };
+use crate::cli::chat::CONTINUATION_LINE;
 
 // TODO: support http transport type
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -202,15 +203,23 @@ impl CustomTool {
             style::ResetColor,
         )?;
         if let Some(params) = &self.params {
+            let params = match serde_json::to_string_pretty(params) {
+                Ok(params) => params
+                    .split("\n")
+                    .map(|p| format!("{CONTINUATION_LINE} {p}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => format!("{:?}", params),
+            };
             queue!(
                 updates,
                 style::Print(" with the param:\n"),
-                style::SetForegroundColor(style::Color::Yellow),
-                style::Print(serde_json::to_string_pretty(params).unwrap_or_else(|_| format!("{:?}", params))),
+                style::Print(params),
                 style::ResetColor,
             )?;
+        } else {
+            queue!(updates, style::Print("\n"))?;
         }
-        queue!(updates, style::Print("\n"),)?;
         Ok(())
     }
 

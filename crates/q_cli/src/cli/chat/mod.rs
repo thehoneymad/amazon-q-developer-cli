@@ -271,6 +271,9 @@ const RESPONSE_TIMEOUT_CONTENT: &str = "Response timed out - message took too lo
 const TRUST_ALL_TEXT: &str = color_print::cstr! {"<green!>All tools are now trusted (<red!>!</red!>). Amazon Q will execute tools <bold>without</bold> asking for confirmation.\
 \nAgents can sometimes do unexpected things so understand the risks.</green!>"};
 
+const TOOL_BULLET: &str = " ● ";
+const CONTINUATION_LINE: &str = " ⋮ ";
+
 pub async fn chat(
     input: Option<String>,
     no_interactive: bool,
@@ -1208,8 +1211,9 @@ impl ChatContext {
         // q session*. (e.g., if I add files to context, that won't show up for skim for the current
         // q session unless we do this in prompt_user... unless you can find a better way)
         if let Some(ref context_manager) = self.conversation_state.context_manager {
+            let tool_names = self.tool_manager.tn_map.keys().cloned().collect::<Vec<_>>();
             self.input_source
-                .put_skim_command_selector(Arc::new(context_manager.clone()));
+                .put_skim_command_selector(Arc::new(context_manager.clone()), tool_names);
         }
 
         let user_input = match self.read_user_input(&self.generate_tool_trust_prompt(), false) {
@@ -2681,7 +2685,6 @@ impl ChatContext {
 
             let tool_time = std::time::Instant::now().duration_since(tool_start);
             let tool_time = format!("{}.{}", tool_time.as_secs(), tool_time.subsec_millis());
-            const CONTINUATION_LINE: &str = " ⋮ ";
 
             match invoke_result {
                 Ok(result) => {
@@ -3093,16 +3096,13 @@ impl ChatContext {
     }
 
     async fn print_tool_descriptions(&mut self, tool_use: &QueuedTool, trusted: bool) -> Result<(), ChatError> {
-        const TOOL_BULLET: &str = " ● ";
-        const CONTINUATION_LINE: &str = " ⋮ ";
-
         queue!(
             self.output,
             style::SetForegroundColor(Color::Magenta),
             style::Print(format!(
-                "🛠️  Using tool: {} {}",
+                "🛠️  Using tool: {}{}",
                 tool_use.tool.display_name(),
-                if trusted { "(trusted)".dark_green() } else { "".reset() }
+                if trusted { " (trusted)".dark_green() } else { "".reset() }
             )),
             style::SetForegroundColor(Color::Reset)
         )?;
@@ -3111,9 +3111,9 @@ impl ChatContext {
                 self.output,
                 style::SetForegroundColor(Color::Reset),
                 style::Print(" from mcp server "),
-                style::SetForegroundColor(Color::Green),
-                style::SetForegroundColor(Color::Cyan),
+                style::SetForegroundColor(Color::Magenta),
                 style::Print(tool.client.get_server_name()),
+                style::SetForegroundColor(Color::Reset),
             )?;
         }
         queue!(self.output, style::Print("\n"), style::Print(CONTINUATION_LINE))?;
@@ -3330,11 +3330,6 @@ fn create_stream(model_responses: serde_json::Value) -> StreamingClient {
         mock.push(stream);
     }
     StreamingClient::mock(mock)
-}
-
-/// Returns all tools supported by Q chat.
-pub fn load_tools() -> Result<HashMap<String, ToolSpec>> {
-    Ok(serde_json::from_str(include_str!("tools/tool_index.json"))?)
 }
 
 #[cfg(test)]
