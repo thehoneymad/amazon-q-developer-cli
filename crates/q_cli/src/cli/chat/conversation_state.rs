@@ -170,7 +170,9 @@ impl ConversationState {
                     candidate_asst.replace(assistant_msg);
                 },
             }
-            if let (Some(user), Some(asst)) = (candidate_user.take(), candidate_asst.take()) {
+            if candidate_asst.is_some() && candidate_user.is_some() {
+                let asst = candidate_asst.take().unwrap();
+                let user = candidate_user.take().unwrap();
                 self.append_assistant_transcript(&asst);
                 self.history.push_back((user, asst));
             }
