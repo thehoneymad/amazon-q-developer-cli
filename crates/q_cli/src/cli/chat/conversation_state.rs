@@ -767,7 +767,6 @@ mod tests {
         AMAZONQ_FILENAME,
         profile_context_path,
     };
-    use super::super::load_tools;
     use super::super::message::AssistantToolUse;
     use super::*;
     use crate::cli::chat::tool_manager::ToolManager;
@@ -985,6 +984,7 @@ mod tests {
     async fn test_conversation_state_additional_context() {
         tracing_subscriber::fmt::try_init().ok();
 
+        let mut tool_manager = ToolManager::default();
         let ctx = Context::builder().with_test_home().await.unwrap().build_fake();
         let conversation_start_context = "conversation start context";
         let prompt_context = "prompt context";
@@ -1008,8 +1008,13 @@ mod tests {
             .write(&config_path, serde_json::to_string(&config).unwrap())
             .await
             .unwrap();
-        let mut conversation_state =
-            ConversationState::new(ctx, load_tools().unwrap(), None, Some(SharedWriter::stdout())).await;
+        let mut conversation_state = ConversationState::new(
+            ctx,
+            tool_manager.load_tools().await.unwrap(),
+            None,
+            Some(SharedWriter::stdout()),
+        )
+        .await;
 
         // Simulate conversation flow
         conversation_state.set_next_user_message("start".to_string()).await;
