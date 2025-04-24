@@ -297,7 +297,6 @@ impl ToolsSubcommand {
   <em>untrust <<tools...>></em>             <black!>Revert a tool or tools to per-request confirmation</black!>
   <em>trustall</em>                       <black!>Trust all tools (equivalent to deprecated /acceptall)</black!>
   <em>reset</em>                          <black!>Reset all tools to default permission levels</black!>
-  <em>prompts</em>                        <black!>Reusable templates from mcp servers installed</black!>
   <em>reset <<tool name>></em>              <black!>Reset a single tool to default permission level</black!>"};
     const BASE_COMMAND: &str = color_print::cstr! {"<cyan!>Usage: /tools [SUBCOMMAND]</cyan!>
 
