@@ -3229,6 +3229,9 @@ struct ToolUseEventBuilder {
     pub is_accepted: bool,
     pub is_success: Option<bool>,
     pub is_valid: Option<bool>,
+    pub is_custom_tool: bool,
+    pub input_token_size: Option<usize>,
+    pub output_token_size: Option<usize>,
 }
 
 impl ToolUseEventBuilder {
@@ -3242,6 +3245,9 @@ impl ToolUseEventBuilder {
             is_accepted: false,
             is_success: None,
             is_valid: None,
+            is_custom_tool: false,
+            input_token_size: None,
+            output_token_size: None,
         }
     }
 
@@ -3272,6 +3278,9 @@ impl From<ToolUseEventBuilder> for fig_telemetry::EventType {
             is_accepted: val.is_accepted,
             is_success: val.is_success,
             is_valid: val.is_valid,
+            is_custom_tool: val.is_custom_tool,
+            input_token_size: val.input_token_size,
+            output_token_size: val.output_token_size,
         }
     }
 }
