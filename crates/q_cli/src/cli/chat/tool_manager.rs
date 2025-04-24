@@ -128,8 +128,8 @@ impl McpServerConfig {
         let local_buf = tokio::fs::read(cwd).await.ok();
         let conf = match (global_buf, local_buf) {
             (Some(global_buf), Some(local_buf)) => {
-                let mut global_conf = serde_json::from_slice::<Self>(&global_buf)?;
-                let local_conf = serde_json::from_slice::<Self>(&local_buf)?;
+                let mut global_conf = Self::from_slice(&global_buf, output, "global")?;
+                let local_conf = Self::from_slice(&local_buf, output, "local")?;
                 for (server_name, config) in local_conf.mcp_servers {
                     if global_conf.mcp_servers.insert(server_name.clone(), config).is_some() {
                         queue!(
@@ -147,12 +147,29 @@ impl McpServerConfig {
                 }
                 global_conf
             },
-            (None, Some(local_buf)) => serde_json::from_slice::<Self>(&local_buf)?,
-            (Some(global_buf), None) => serde_json::from_slice::<Self>(&global_buf)?,
+            (None, Some(local_buf)) => Self::from_slice(&local_buf, output, "local")?,
+            (Some(global_buf), None) => Self::from_slice(&global_buf, output, "global")?,
             _ => Default::default(),
         };
         output.flush()?;
         Ok(conf)
+    }
+
+    fn from_slice(slice: &[u8], output: &mut impl Write, location: &str) -> eyre::Result<McpServerConfig> {
+        match serde_json::from_slice::<Self>(slice) {
+            Ok(config) => Ok(config),
+            Err(e) => {
+                queue!(
+                    output,
+                    style::SetForegroundColor(style::Color::Yellow),
+                    style::Print("WARNING: "),
+                    style::ResetColor,
+                    style::Print(format!("Error reading {location} mcp config: {e}\n")),
+                    style::Print("Please check to make sure config is correct. Discarding.\n"),
+                )?;
+                Ok(McpServerConfig::default())
+            },
+        }
     }
 }
 
