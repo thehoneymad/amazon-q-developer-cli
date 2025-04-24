@@ -268,7 +268,11 @@ where
                         tracing::trace!(target: "mcp", "{server_name} logged {}", msg);
                     },
                     Err(e) => {
-                        tracing::error!("Error encountered while reading from stderr for {server_name}: {:?}", e);
+                        tracing::error!(
+                            "Error encountered while reading from stderr for {server_name}: {:?}\nEnding stderr listening task.",
+                            e
+                        );
+                        break;
                     },
                 }
             }
