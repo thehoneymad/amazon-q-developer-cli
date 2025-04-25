@@ -90,6 +90,10 @@ use message::{
     ToolUseResult,
     ToolUseResultBlock,
 };
+use rand::distr::{
+    Alphanumeric,
+    SampleString,
+};
 use shared_writer::SharedWriter;
 
 /// Help text for the compact command
@@ -166,6 +170,7 @@ use tools::{
 use tracing::{
     debug,
     error,
+    info,
     trace,
     warn,
 };
@@ -342,6 +347,8 @@ pub async fn chat(
         }
     }
 
+    let conversation_id = Alphanumeric.sample_string(&mut rand::rng(), 9);
+    info!(?conversation_id, "Generated new conversation id");
     let (prompt_request_sender, prompt_request_receiver) = std::sync::mpsc::channel::<Option<String>>();
     let (prompt_response_sender, prompt_response_receiver) = std::sync::mpsc::channel::<Vec<String>>();
     let mut tool_manager = ToolManagerBuilder::default()
@@ -378,6 +385,7 @@ pub async fn chat(
 
     let mut chat = ChatContext::new(
         ctx,
+        &conversation_id,
         Settings::new(),
         State::new(),
         output,
@@ -467,6 +475,7 @@ impl ChatContext {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         ctx: Arc<Context>,
+        conversation_id: &str,
         settings: Settings,
         state: State,
         output: SharedWriter,
@@ -482,6 +491,8 @@ impl ChatContext {
     ) -> Result<Self> {
         let ctx_clone = Arc::clone(&ctx);
         let output_clone = output.clone();
+        let conversation_state =
+            ConversationState::new(ctx_clone, conversation_id, tool_config, profile, Some(output_clone)).await;
         Ok(Self {
             ctx,
             settings,
@@ -494,7 +505,7 @@ impl ChatContext {
             terminal_width_provider,
             spinner: None,
             tool_permissions,
-            conversation_state: ConversationState::new(ctx_clone, tool_config, profile, Some(output_clone)).await,
+            conversation_state,
             tool_use_telemetry_events: HashMap::new(),
             tool_use_status: ToolUseStatus::Idle,
             tool_manager,
@@ -3373,6 +3384,7 @@ mod tests {
             .expect("Tools failed to load");
         ChatContext::new(
             Arc::clone(&ctx),
+            "fake_conv_id",
             Settings::new_fake(),
             State::new_fake(),
             SharedWriter::stdout(),
@@ -3501,6 +3513,7 @@ mod tests {
             .expect("Tools failed to load");
         ChatContext::new(
             Arc::clone(&ctx),
+            "fake_conv_id",
             Settings::new_fake(),
             State::new_fake(),
             SharedWriter::stdout(),
@@ -3604,6 +3617,7 @@ mod tests {
             .expect("Tools failed to load");
         ChatContext::new(
             Arc::clone(&ctx),
+            "fake_conv_id",
             Settings::new_fake(),
             State::new_fake(),
             SharedWriter::stdout(),
@@ -3679,6 +3693,7 @@ mod tests {
             .expect("Tools failed to load");
         ChatContext::new(
             Arc::clone(&ctx),
+            "fake_conv_id",
             Settings::new_fake(),
             State::new_fake(),
             SharedWriter::stdout(),

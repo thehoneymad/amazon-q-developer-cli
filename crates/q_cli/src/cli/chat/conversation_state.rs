@@ -19,14 +19,9 @@ use fig_api_client::model::{
 };
 use fig_os_shim::Context;
 use mcp_client::Prompt;
-use rand::distr::{
-    Alphanumeric,
-    SampleString,
-};
 use tracing::{
     debug,
     error,
-    info,
     warn,
 };
 
@@ -88,13 +83,11 @@ pub struct ConversationState {
 impl ConversationState {
     pub async fn new(
         ctx: Arc<Context>,
+        conversation_id: &str,
         tool_config: HashMap<String, ToolSpec>,
         profile: Option<String>,
         updates: Option<SharedWriter>,
     ) -> Self {
-        let conversation_id = Alphanumeric.sample_string(&mut rand::rng(), 9);
-        info!(?conversation_id, "Generated new conversation id");
-
         // Initialize context manager
         let context_manager = match ContextManager::new(ctx).await {
             Ok(mut manager) => {
@@ -113,7 +106,7 @@ impl ConversationState {
         };
 
         Self {
-            conversation_id,
+            conversation_id: conversation_id.to_string(),
             next_message: None,
             history: VecDeque::new(),
             valid_history_range: Default::default(),
@@ -866,6 +859,7 @@ mod tests {
         let mut tool_manager = ToolManager::default();
         let mut conversation_state = ConversationState::new(
             Context::new_fake(),
+            "fake_conv_id",
             tool_manager.load_tools().await.unwrap(),
             None,
             None,
@@ -889,6 +883,7 @@ mod tests {
         let mut tool_manager = ToolManager::default();
         let mut conversation_state = ConversationState::new(
             Context::new_fake(),
+            "fake_conv_id",
             tool_manager.load_tools().await.unwrap(),
             None,
             None,
@@ -916,6 +911,7 @@ mod tests {
         // Build a long conversation history of user messages mixed in with tool results.
         let mut conversation_state = ConversationState::new(
             Context::new_fake(),
+            "fake_conv_id",
             tool_manager.load_tools().await.unwrap(),
             None,
             None,
@@ -951,8 +947,14 @@ mod tests {
         ctx.fs().write(AMAZONQ_FILENAME, "test context").await.unwrap();
 
         let mut tool_manager = ToolManager::default();
-        let mut conversation_state =
-            ConversationState::new(ctx, tool_manager.load_tools().await.unwrap(), None, None).await;
+        let mut conversation_state = ConversationState::new(
+            ctx,
+            "fake_conv_id",
+            tool_manager.load_tools().await.unwrap(),
+            None,
+            None,
+        )
+        .await;
 
         // First, build a large conversation history. We need to ensure that the order is always
         // User -> Assistant -> User -> Assistant ...and so on.
@@ -1012,6 +1014,7 @@ mod tests {
             .unwrap();
         let mut conversation_state = ConversationState::new(
             ctx,
+            "fake_conv_id",
             tool_manager.load_tools().await.unwrap(),
             None,
             Some(SharedWriter::stdout()),
