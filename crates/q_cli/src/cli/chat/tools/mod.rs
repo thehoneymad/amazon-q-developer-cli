@@ -228,6 +228,15 @@ pub struct InvokeOutput {
     pub output: OutputKind,
 }
 
+impl InvokeOutput {
+    pub fn as_str(&self) -> &str {
+        match &self.output {
+            OutputKind::Text(s) => s.as_str(),
+            OutputKind::Json(j) => j.as_str().unwrap_or_default(),
+        }
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum OutputKind {

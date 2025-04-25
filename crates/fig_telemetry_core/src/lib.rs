@@ -27,6 +27,7 @@ use aws_toolkit_telemetry_definitions::metrics::{
 };
 use aws_toolkit_telemetry_definitions::types::{
     CodewhispererterminalCustomToolInputTokenSize,
+    CodewhispererterminalCustomToolLatency,
     CodewhispererterminalCustomToolOutputTokenSize,
     CodewhispererterminalInCloudshell,
     CodewhispererterminalIsToolValid,
@@ -325,6 +326,7 @@ impl Event {
                 is_custom_tool,
                 input_token_size,
                 output_token_size,
+                custom_tool_call_latency,
             } => Some(
                 CodewhispererterminalToolUseSuggested {
                     create_time: self.created_time,
@@ -343,6 +345,8 @@ impl Event {
                         .map(|s| CodewhispererterminalCustomToolInputTokenSize(s as i64)),
                     codewhispererterminal_custom_tool_output_token_size: output_token_size
                         .map(|s| CodewhispererterminalCustomToolOutputTokenSize(s as i64)),
+                    codewhispererterminal_custom_tool_latency: custom_tool_call_latency
+                        .map(|l| CodewhispererterminalCustomToolLatency(l as i64)),
                 }
                 .into_metric_datum(),
             ),
@@ -451,6 +455,7 @@ pub enum EventType {
         is_custom_tool: bool,
         input_token_size: Option<usize>,
         output_token_size: Option<usize>,
+        custom_tool_call_latency: Option<usize>,
     },
     McpServerInit {
         conversation_id: String,

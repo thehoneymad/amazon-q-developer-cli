@@ -2697,6 +2697,12 @@ impl ChatContext {
             execute!(self.output, style::Print("\n"))?;
 
             let tool_time = std::time::Instant::now().duration_since(tool_start);
+            if let Tool::Custom(ct) = &tool.tool {
+                tool_telemetry = tool_telemetry.and_modify(|ev| {
+                    ev.custom_tool_call_latency = Some(tool_time.as_secs() as usize);
+                    ev.input_token_size = Some(ct.get_input_token_size());
+                });
+            }
             let tool_time = format!("{}.{}", tool_time.as_secs(), tool_time.subsec_millis());
 
             match invoke_result {
@@ -2713,7 +2719,11 @@ impl ChatContext {
                         style::Print("\n"),
                     )?;
 
-                    tool_telemetry.and_modify(|ev| ev.is_success = Some(true));
+                    tool_telemetry = tool_telemetry.and_modify(|ev| ev.is_success = Some(true));
+                    if let Tool::Custom(_) = &tool.tool {
+                        tool_telemetry
+                            .and_modify(|ev| ev.output_token_size = Some(TokenCounter::count_tokens(result.as_str())));
+                    }
                     tool_results.push(ToolUseResult {
                         tool_use_id: tool.id,
                         content: vec![result.into()],
@@ -3244,6 +3254,7 @@ struct ToolUseEventBuilder {
     pub is_custom_tool: bool,
     pub input_token_size: Option<usize>,
     pub output_token_size: Option<usize>,
+    pub custom_tool_call_latency: Option<usize>,
 }
 
 impl ToolUseEventBuilder {
@@ -3260,6 +3271,7 @@ impl ToolUseEventBuilder {
             is_custom_tool: false,
             input_token_size: None,
             output_token_size: None,
+            custom_tool_call_latency: None,
         }
     }
 
@@ -3293,6 +3305,7 @@ impl From<ToolUseEventBuilder> for fig_telemetry::EventType {
             is_custom_tool: val.is_custom_tool,
             input_token_size: val.input_token_size,
             output_token_size: val.output_token_size,
+            custom_tool_call_latency: val.custom_tool_call_latency,
         }
     }
 }

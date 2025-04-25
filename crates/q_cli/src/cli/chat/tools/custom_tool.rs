@@ -32,6 +32,7 @@ use super::{
     ToolSpec,
 };
 use crate::cli::chat::CONTINUATION_LINE;
+use crate::cli::chat::token_counter::TokenCounter;
 
 // TODO: support http transport type
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -226,5 +227,10 @@ impl CustomTool {
 
     pub async fn validate(&mut self, _ctx: &Context) -> Result<()> {
         Ok(())
+    }
+
+    pub fn get_input_token_size(&self) -> usize {
+        TokenCounter::count_tokens(self.method.as_str())
+            + TokenCounter::count_tokens(self.params.as_ref().map_or("", |p| p.as_str().unwrap_or_default()))
     }
 }
