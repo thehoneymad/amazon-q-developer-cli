@@ -178,6 +178,7 @@ pub struct ToolManagerBuilder {
     mcp_server_config: Option<McpServerConfig>,
     prompt_list_sender: Option<std::sync::mpsc::Sender<Vec<String>>>,
     prompt_list_receiver: Option<std::sync::mpsc::Receiver<Option<String>>>,
+    conversation_id: Option<String>,
 }
 
 impl ToolManagerBuilder {
@@ -196,8 +197,15 @@ impl ToolManagerBuilder {
         self
     }
 
+    pub fn conversation_id(mut self, conversation_id: &str) -> Self {
+        self.conversation_id.replace(conversation_id.to_string());
+        self
+    }
+
     pub fn build(mut self) -> eyre::Result<ToolManager> {
         let McpServerConfig { mcp_servers } = self.mcp_server_config.ok_or(eyre::eyre!("Missing mcp server config"))?;
+        debug_assert!(self.conversation_id.is_some());
+        let conversation_id = self.conversation_id.ok_or(eyre::eyre!("Missing conversation id"))?;
         let regex = regex::Regex::new(VALID_TOOL_NAME)?;
         let mut hasher = DefaultHasher::new();
         let pre_initialized = mcp_servers
@@ -315,6 +323,15 @@ impl ToolManagerBuilder {
                 },
                 Err(e) => {
                     error!("Error initializing mcp client for server {}: {:?}", name, &e);
+                    let event = fig_telemetry::EventType::McpServerInit {
+                        conversation_id: conversation_id.clone(),
+                        init_failure_reason: Some(e.to_string()),
+                        number_of_tools: 0,
+                    };
+                    tokio::spawn(async move {
+                        let app_event = fig_telemetry::AppTelemetryEvent::new(event).await;
+                        fig_telemetry::dispatch_or_send_event(app_event).await;
+                    });
                     let _ = tx.send(LoadingMsg::Error {
                         name: name.clone(),
                         msg: e,
@@ -415,6 +432,7 @@ impl ToolManagerBuilder {
         }
 
         Ok(ToolManager {
+            conversation_id,
             clients,
             prompts,
             loading_display_task,
@@ -440,6 +458,10 @@ pub struct PromptBundle {
 /// a cache of available prompts from connected servers.
 #[derive(Default)]
 pub struct ToolManager {
+    /// Unique identifier for the current conversation.
+    /// This ID is used to track and associate tools with a specific chat session.
+    pub conversation_id: String,
+
     /// Map of server names to their corresponding client instances.
     /// These clients are used to communicate with MCP servers.
     pub clients: HashMap<String, Arc<CustomToolClient>>,
@@ -473,6 +495,7 @@ impl ToolManager {
             let tool_specs = serde_json::from_str::<HashMap<String, ToolSpec>>(include_str!("tools/tool_index.json"))?;
             Arc::new(Mutex::new(tool_specs))
         };
+        let conversation_id = self.conversation_id.clone();
         let regex = Arc::new(regex::Regex::new(VALID_TOOL_NAME)?);
         let load_tool = self
             .clients
@@ -483,6 +506,7 @@ impl ToolManager {
                 let tx_clone = tx.clone();
                 let regex_clone = regex.clone();
                 let tool_specs_clone = tool_specs.clone();
+                let conversation_id = conversation_id.clone();
                 async move {
                     let tool_spec = client_clone.init().await;
                     let mut sanitized_mapping = HashMap::<String, String>::new();
@@ -493,6 +517,7 @@ impl ToolManager {
                             // This would also help us locate which mcp server to call the tool from.
                             let mut out_of_spec_tool_names = Vec::<String>::new();
                             let mut hasher = DefaultHasher::new();
+                            let number_of_tools = specs.len();
                             // Sanitize tool names to ensure they comply with the naming requirements:
                             // 1. If the name already matches the regex pattern and doesn't contain the namespace delimiter, use it as is
                             // 2. Otherwise, remove invalid characters and handle special cases:
@@ -524,6 +549,16 @@ impl ToolManager {
                                 spec.tool_origin = ToolOrigin::McpServer(server_name.clone());
                                 tool_specs_clone.lock().await.insert(spec.name.clone(), spec);
                             }
+                            // Send server load success metric datum
+                            tokio::spawn(async move {
+                                let event = fig_telemetry::EventType::McpServerInit { conversation_id, init_failure_reason: None, number_of_tools  };
+                                let app_event = fig_telemetry::AppTelemetryEvent::new(event).await;
+                                fig_telemetry::dispatch_or_send_event(app_event).await;
+                            });
+                            // Tool name translation. This is beyond of the scope of what is
+                            // considered a "server load". Reasoning being:
+                            // - Failures here are not related to server load
+                            // - There is not a whole lot we can do with this data
                             if let Some(tx_clone) = &tx_clone {
                                 let send_result = if !out_of_spec_tool_names.is_empty() {
                                     let allowed_len = 64 - server_name.len();
@@ -564,6 +599,12 @@ impl ToolManager {
                         },
                         Err(e) => {
                             error!("Error obtaining tool spec for {}: {:?}", server_name_clone, e);
+                            let init_failure_reason = Some(e.to_string());
+                            tokio::spawn(async move {
+                                let event = fig_telemetry::EventType::McpServerInit { conversation_id, init_failure_reason, number_of_tools: 0  };
+                                let app_event = fig_telemetry::AppTelemetryEvent::new(event).await;
+                                fig_telemetry::dispatch_or_send_event(app_event).await;
+                            });
                             if let Some(tx_clone) = &tx_clone {
                                 if let Err(e) = tx_clone.send(LoadingMsg::Error {
                                     name: server_name_clone,

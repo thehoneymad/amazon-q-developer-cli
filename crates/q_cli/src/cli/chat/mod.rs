@@ -355,6 +355,7 @@ pub async fn chat(
         .mcp_server_config(mcp_server_configs)
         .prompt_list_sender(prompt_response_sender)
         .prompt_list_receiver(prompt_request_receiver)
+        .conversation_id(&conversation_id)
         .build()?;
     let tool_config = tool_manager.load_tools().await?;
     let mut tool_permissions = ToolPermissions::new(tool_config.len());
