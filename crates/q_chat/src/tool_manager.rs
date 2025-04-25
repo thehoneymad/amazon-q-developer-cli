@@ -55,8 +55,8 @@ use super::tools::{
     Tool,
     ToolOrigin,
 };
-use crate::cli::chat::tools::ToolSpec;
-use crate::cli::chat::tools::custom_tool::CustomTool;
+use crate::tools::ToolSpec;
+use crate::tools::custom_tool::CustomTool;
 
 const NAMESPACE_DELIMITER: &str = "___";
 // This applies for both mcp server and tool name since in the end the tool name as seen by the

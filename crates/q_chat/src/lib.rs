@@ -1,3 +1,4 @@
+pub mod cli;
 mod command;
 mod consts;
 mod context;
@@ -13,7 +14,7 @@ mod skim_integration;
 mod token_counter;
 mod tool_manager;
 mod tools;
-mod util;
+pub mod util;
 
 use std::borrow::Cow;
 use std::collections::{
@@ -61,7 +62,6 @@ use crossterm::{
     style,
     terminal,
 };
-use dialoguer::console::strip_ansi_codes;
 use eyre::{
     ErrReport,
     Result,
@@ -279,6 +279,24 @@ const TRUST_ALL_TEXT: &str = color_print::cstr! {"<green!>All tools are now trus
 
 const TOOL_BULLET: &str = " ● ";
 const CONTINUATION_LINE: &str = " ⋮ ";
+
+pub async fn launch_chat(args: cli::Chat) -> Result<ExitCode> {
+    let trust_tools = args.trust_tools.map(|mut tools| {
+        if tools.len() == 1 && tools[0].is_empty() {
+            tools.pop();
+        }
+        tools
+    });
+    chat(
+        args.input,
+        args.no_interactive,
+        args.accept_all,
+        args.profile,
+        args.trust_all_tools,
+        trust_tools,
+    )
+    .await
+}
 
 pub async fn chat(
     input: Option<String>,
@@ -693,7 +711,7 @@ impl ChatContext {
 
         // Centered wrapped content
         for line in wrapped_lines {
-            let visible_line_len = strip_ansi_codes(&line).len();
+            let visible_line_len = strip_ansi_escapes::strip(&line).len();
             let left_pad = (box_width - 4 - visible_line_len) / 2;
 
             let content = format!(
@@ -2867,16 +2885,35 @@ impl ChatContext {
                             tool_use_id,
                             name,
                             message,
+                            time_elapsed,
                         } => {
                             error!(
                                 recv_error.request_id,
                                 tool_use_id, name, "The response stream ended before the entire tool use was received"
                             );
                             if self.interactive {
-                                execute!(self.output, cursor::Hide)?;
+                                drop(self.spinner.take());
+                                queue!(
+                                    self.output,
+                                    terminal::Clear(terminal::ClearType::CurrentLine),
+                                    cursor::MoveToColumn(0),
+                                    style::SetForegroundColor(Color::Yellow),
+                                    style::SetAttribute(Attribute::Bold),
+                                    style::Print(format!(
+                                        "Warning: received an unexpected error from the model after {:.2}s",
+                                        time_elapsed.as_secs_f64()
+                                    )),
+                                )?;
+                                if let Some(request_id) = recv_error.request_id {
+                                    queue!(
+                                        self.output,
+                                        style::Print(format!("\n         request_id: {}", request_id))
+                                    )?;
+                                }
+                                execute!(self.output, style::Print("\n\n"), style::SetAttribute(Attribute::Reset))?;
                                 self.spinner = Some(Spinner::new(
                                     Spinners::Dots,
-                                    "The generated tool use was too large, trying to divide up the work...".to_string(),
+                                    "Trying to divide up the work...".to_string(),
                                 ));
                             }
 
@@ -3149,7 +3186,7 @@ impl ChatContext {
             .tool
             .queue_description(&self.ctx, &mut self.output)
             .await
-            .map_err(|e| ChatError::Custom(format!("failed to print tool: {}", e).into()))?;
+            .map_err(|e| ChatError::Custom(format!("failed to print tool, `{}`: {}", tool_use.name, e).into()))?;
 
         Ok(())
     }

@@ -31,8 +31,8 @@ use super::{
     InvokeOutput,
     ToolSpec,
 };
-use crate::cli::chat::CONTINUATION_LINE;
-use crate::cli::chat::token_counter::TokenCounter;
+use crate::CONTINUATION_LINE;
+use crate::token_counter::TokenCounter;
 
 // TODO: support http transport type
 #[derive(Clone, Serialize, Deserialize, Debug)]

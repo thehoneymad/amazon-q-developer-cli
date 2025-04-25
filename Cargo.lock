@@ -6812,6 +6812,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "q_chat"
+version = "1.8.0"
+dependencies = [
+ "anstream",
+ "aws-smithy-types",
+ "bstr",
+ "clap",
+ "color-print",
+ "convert_case 0.8.0",
+ "crossterm",
+ "eyre",
+ "fig_api_client",
+ "fig_auth",
+ "fig_diagnostic",
+ "fig_os_shim",
+ "fig_settings",
+ "fig_telemetry",
+ "fig_util",
+ "futures",
+ "glob",
+ "mcp_client",
+ "rand 0.9.0",
+ "regex",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "shell-color",
+ "shell-words",
+ "shellexpand",
+ "shlex",
+ "similar",
+ "skim",
+ "spinners",
+ "strip-ansi-escapes",
+ "syntect",
+ "tempfile",
+ "thiserror 2.0.12",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-width 0.2.0",
+ "url",
+ "uuid",
+ "winnow 0.6.22",
+]
+
+[[package]]
 name = "q_cli"
 version = "1.8.0"
 dependencies = [
@@ -6822,13 +6870,9 @@ dependencies = [
  "arboard",
  "assert_cmd",
  "async-trait",
- "aws-smithy-types",
- "aws-types",
  "base64 0.22.1",
  "bitflags 2.9.0",
- "bstr",
  "bytes",
- "camino",
  "cfg-if",
  "clap",
  "clap_complete",
@@ -6874,20 +6918,13 @@ dependencies = [
  "parking_lot",
  "paste",
  "predicates",
+ "q_chat",
  "rand 0.9.0",
  "regex",
- "rustyline",
  "semver",
  "serde",
  "serde_json",
- "shell-color",
- "shell-words",
- "shellexpand",
- "shlex",
- "similar",
- "skim",
  "spinners",
- "syntect",
  "sysinfo 0.32.1",
  "tempfile",
  "thiserror 2.0.12",
@@ -6905,7 +6942,6 @@ dependencies = [
  "whoami",
  "winapi",
  "windows 0.58.0",
- "winnow 0.6.22",
 ]
 
 [[package]]
@@ -8233,11 +8269,11 @@ dependencies = [
 
 [[package]]
 name = "strip-ansi-escapes"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55ff8ef943b384c414f54aefa961dd2bd853add74ec75e7ac74cf91dba62bcfa"
+checksum = "2a8f8038e7e7969abb3f1b7c2a811225e9296da208539e0f79c5251d6cac0025"
 dependencies = [
- "vte 0.11.1",
+ "vte 0.14.1",
 ]
 
 [[package]]
@@ -8865,9 +8901,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.14"
+version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b9590b93e6fcc1739458317cccd391ad3955e2bde8913edf6f95f9e65a8f034"
+checksum = "66a539a9ad6d5d281510d5bd368c973d636c02dbf8a67300bfb6b950696ad7df"
 dependencies = [
  "bytes",
  "futures-core",
@@ -9364,12 +9400,11 @@ dependencies = [
 
 [[package]]
 name = "vte"
-version = "0.11.1"
+version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5022b5fbf9407086c180e9557be968742d839e68346af7792b8592489732197"
+checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
 dependencies = [
- "utf8parse",
- "vte_generate_state_changes",
+ "memchr",
 ]
 
 [[package]]
@@ -9380,16 +9415,6 @@ checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
 dependencies = [
  "arrayvec",
  "memchr",
-]
-
-[[package]]
-name = "vte_generate_state_changes"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e369bee1b05d510a7b4ed645f5faa90619e05437111783ea5848f28d97d3c2e"
-dependencies = [
- "proc-macro2",
- "quote",
 ]
 
 [[package]]
