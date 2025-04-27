@@ -1,16 +1,70 @@
 # Project Wingman
 
-Project Wingman is an initiative to extend the Amazon Q Developer CLI for team-specific purposes. This section documents the architecture, implementation details, and learning resources for developers working on these extensions.
+## Vision and Purpose
 
-## Overview
+Project Wingman transforms the Amazon Q Developer CLI into a team-specific productivity platform. While Amazon Q provides AI-powered assistance, our vision extends beyond its capabilities to create an integrated experience tailored to our team's workflows and internal systems.
 
-Project Wingman aims to enhance the Amazon Q Developer CLI with custom tools and features tailored for specific team workflows. This documentation serves as both a technical reference and a learning resource for Rust development in the context of the Amazon Q CLI.
+We're bridging the gap between Amazon Q's general-purpose capabilities and our team's needs. By extending the CLI with custom tools, context awareness, and domain-specific knowledge, we're creating an AI assistant that understands our development environment and interacts with our internal systems.
 
-## Purpose
+## Key Objectives
 
-- Document the architecture and extension points of Amazon Q CLI
-- Provide implementation guides for adding custom tools
-- Capture Rust learning insights relevant to CLI extension
-- Serve as a reference for team members working on the project
+Our Project Wingman pursues four objectives that guide our development:
 
-> **Note:** This section is specific to Project Wingman and can be easily removed from the main documentation when no longer needed.
+First, we're building a tool registry system that allows Amazon Q to interact with our internal tools and services. This means we'll be able to ask Amazon Q to create Jira tickets, search the wiki, or review code changes without leaving our terminal.
+
+Second, we're implementing a context graph that gives Amazon Q persistent memory about our systems. Unlike the standard Amazon Q that starts each conversation fresh, our extended version will remember previous interactions and maintain understanding of our projects, repositories, and team structure.
+
+Third, we're adding domain-scoped browsing capabilities to ensure secure access to internal resources. This allows Amazon Q to retrieve information from approved sources while maintaining security boundaries.
+
+Fourth, we're documenting our entire journey to serve as both a technical reference for implementation and a learning resource for team members new to Rust development or the Amazon Q architecture.
+
+## Audience for This Documentation
+
+We've created this documentation to serve multiple audiences:
+
+For **directors and stakeholders**, we provide overviews of the architecture, benefits, and implementation roadmap without technical minutiae.
+
+For **product managers**, we offer explanations of features, user workflows, and integration points with existing systems to facilitate planning.
+
+For **engineers**, we include technical specifications, code examples, and implementation guides for extending and maintaining the system.
+
+For **new team members**, our documentation serves as an onboarding resource that explains both the Amazon Q CLI architecture and our extensions.
+
+## Document Structure
+
+We've organized the Project Wingman documentation into sections:
+
+- **Getting Started** provides setup instructions and first steps
+- **Architecture** explains the system design and component interactions
+- **Amazon Q Chat Architecture** details the existing chat functionality
+- **API Integration and Memory** covers how the system interacts with backend services
+- **MCP Implementation Analysis** examines the Model-Client-Provider framework
+- **High-Level Plan** outlines our strategic roadmap
+- **Implementation Plan** provides technical implementation steps
+- **Extending Tools** guides us through adding new tools to the system
+- **Rust Learning** offers resources for developing in Rust
+- **Custom Tools** documents the team-specific tools we're building
+
+## System Overview
+
+```
+┌─────────────────────┐      ┌───────────────────┐      ┌─────────────────┐
+│                     │      │                   │      │                 │
+│  Amazon Q CLI       │◄────►│  Tool Registry    │◄────►│  Internal Tools │
+│  (Extended)         │      │                   │      │                 │
+│                     │      └───────────────────┘      └─────────────────┘
+│                     │                                         ▲
+│                     │      ┌───────────────────┐              │
+│                     │      │                   │              │
+│                     │◄────►│  Context Graph    │◄─────────────┘
+│                     │      │                   │
+│                     │      └───────────────────┘
+│                     │                                         ▲
+│                     │      ┌───────────────────┐              │
+│                     │      │                   │              │
+│                     │◄────►│  Domain Policies  │◄─────────────┘
+│                     │      │                   │
+└─────────────────────┘      └───────────────────┘
+```
+
+> **Note:** We'll evolve this documentation alongside our project. As we implement features and gain insights, we'll update these pages to reflect our current understanding and approach.
