@@ -18,18 +18,6 @@ Third, we're adding domain-scoped browsing capabilities to ensure secure access 
 
 Fourth, we're documenting our entire journey to serve as both a technical reference for implementation and a learning resource for team members new to Rust development or the Amazon Q architecture.
 
-## Audience for This Documentation
-
-We've created this documentation to serve multiple audiences:
-
-For **directors and stakeholders**, we provide overviews of the architecture, benefits, and implementation roadmap without technical minutiae.
-
-For **product managers**, we offer explanations of features, user workflows, and integration points with existing systems to facilitate planning.
-
-For **engineers**, we include technical specifications, code examples, and implementation guides for extending and maintaining the system.
-
-For **new team members**, our documentation serves as an onboarding resource that explains both the Amazon Q CLI architecture and our extensions.
-
 ## Document Structure
 
 We've organized the Project Wingman documentation into sections:
