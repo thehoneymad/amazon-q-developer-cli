@@ -1,17 +1,33 @@
 # Amazon Q API Integration and Conversation Memory
 
-This document provides an analysis of how Amazon Q CLI integrates with backend AI services and manages conversation memory.
+In this document, we explore how Amazon Q CLI integrates with backend AI services and manages conversation memory. Understanding these aspects is crucial for our Project Wingman extensions.
 
 ## API Integration
 
-### Custom Streaming Clients
+### Our Custom Streaming Clients
 
-The Amazon Q CLI doesn't directly use the public Amazon Bedrock API. Instead, it uses two custom streaming clients:
+Unlike many AI applications that directly use public APIs, we've discovered that Amazon Q CLI uses custom streaming clients that provide specialized functionality:
 
-1. **amzn-codewhisperer-streaming-client**: Used in standard environments
-2. **amzn-qdeveloper-streaming-client**: Used in AWS CloudShell or when specified by environment variables
+```
+┌─────────────────┐     ┌─────────────────────────────┐
+│                 │     │                             │
+│  Amazon Q CLI   │────►│ amzn-codewhisperer-client   │
+│                 │     │                             │
+└─────────────────┘     └─────────────────────────────┘
+        │
+        │               ┌─────────────────────────────┐
+        │               │                             │
+        └──────────────►│ amzn-qdeveloper-client      │
+                        │                             │
+                        └─────────────────────────────┘
+```
 
-The client selection logic is implemented in `fig_api_client/src/clients/streaming_client.rs`:
+We use two different clients depending on the environment:
+
+1. **amzn-codewhisperer-streaming-client**: Our standard client for most environments
+2. **amzn-qdeveloper-streaming-client**: Used when running in AWS CloudShell or when specified by environment variables
+
+The selection logic is implemented in `fig_api_client/src/clients/streaming_client.rs`:
 
 ```rust
 pub async fn new() -> Result<Self, Error> {
@@ -26,36 +42,31 @@ pub async fn new() -> Result<Self, Error> {
 }
 ```
 
-### Endpoints
+### Our Service Endpoints
 
-The clients connect to these endpoints:
+Our clients connect to these managed service endpoints:
 - CodeWhisperer: `https://codewhisperer.us-east-1.amazonaws.com`
 - Q Developer: `https://q.us-east-1.amazonaws.com`
 
-### Model Abstraction
+These endpoints provide access to the underlying AI capabilities while adding specialized features like tool use and context management.
 
-The code doesn't directly reference specific Bedrock models (like Claude or Anthropic), suggesting that:
+### Our Model Abstraction Layer
 
-1. The model selection happens on the server side
-2. The client communicates with Amazon's managed services, which in turn interact with the underlying models
+We've found that our code doesn't directly reference specific Bedrock models (like Claude or Anthropic). This suggests we're using an abstraction layer where:
 
-This architecture allows Amazon to:
-- Control the model selection and parameters
-- Provide a consistent API regardless of the underlying model
-- Implement specialized features like tool use that may not be directly supported by all Bedrock models
+1. Model selection happens on the server side
+2. Our client communicates with Amazon's managed services, which then interact with the underlying models
 
-## Conversation Memory Management
+This architecture gives us several advantages:
+- We can control model selection and parameters centrally
+- We provide a consistent API regardless of the underlying model
+- We implement specialized features that may not be directly supported by all models
+
+## Our Conversation Memory Management
 
 ### Conversation State
 
-The conversation memory is primarily managed by the `ConversationState` struct in `q_chat/src/conversation_state.rs`. This structure:
-
-1. Maintains the conversation history as a queue of user and assistant message pairs
-2. Handles tool use results and their integration into the conversation
-3. Enforces conversation invariants like maximum history length
-4. Prepares the conversation state for sending to the API
-
-Key components of the `ConversationState` struct:
+We manage conversation memory primarily through the `ConversationState` struct in `q_chat/src/conversation_state.rs`:
 
 ```rust
 pub struct ConversationState {
@@ -72,43 +83,86 @@ pub struct ConversationState {
 }
 ```
 
+This structure handles several key aspects of memory management:
+
+1. We maintain conversation history as a queue of user and assistant message pairs
+2. We handle tool use results and integrate them into the conversation
+3. We enforce conversation invariants like maximum history length
+4. We prepare the conversation state for sending to the API
+
 ### Context Management
 
-The `ContextManager` in `q_chat/src/context.rs` handles additional context for conversations:
+Our `ContextManager` in `q_chat/src/context.rs` provides additional context capabilities:
 
-1. Manages profiles for different context configurations
-2. Loads context files from the filesystem
-3. Executes context hooks to dynamically generate context
-4. Provides mechanisms for switching between profiles
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│ ConversationState│────►│ ContextManager  │────►│ Context Files   │
+│                 │     │                 │     │                 │
+└─────────────────┘     └────────┬────────┘     └─────────────────┘
+                                 │
+                                 │
+                        ┌────────▼────────┐
+                        │                 │
+                        │ Context Hooks   │
+                        │                 │
+                        └─────────────────┘
+```
 
-The context configuration is stored in:
+With this system, we:
+1. Manage profiles for different context configurations
+2. Load context files from the filesystem
+3. Execute context hooks to dynamically generate context
+4. Provide mechanisms for switching between profiles
+
+Our context configuration is stored in:
 - Global configuration: `~/.amazonq/chat/global_context.json`
 - Profile configurations: `~/.amazonq/chat/profiles/<profile>/context.json`
 
-### Memory Persistence
+### Memory Persistence Limitations
 
-Conversation history is maintained in memory during a session but is not automatically persisted between sessions. However:
+Currently, we maintain conversation history in memory during a session, but we don't automatically persist it between sessions. We do have some limited persistence mechanisms:
 
-1. The `ContextManager` allows for persistent context across sessions through profiles
+1. Our `ContextManager` allows for persistent context across sessions through profiles
 2. Context files and hooks provide a way to inject consistent context into new conversations
-3. The system supports summarizing conversations to preserve key information while reducing token usage
+3. We support summarizing conversations to preserve key information while reducing token usage
 
-### History Management
+### Our History Management Methods
 
-The `ConversationState` implements several methods to manage history:
+We implement several methods in `ConversationState` to manage history:
 
-1. `enforce_conversation_invariants()`: Ensures the conversation history follows required patterns and doesn't exceed limits
-2. `clear()`: Clears the conversation history while optionally preserving summaries
-3. `push_assistant_message()`: Adds new assistant responses to the history
-4. `add_tool_results()`: Incorporates tool execution results into the conversation
+```rust
+// Ensures the conversation history follows required patterns and doesn't exceed limits
+pub fn enforce_conversation_invariants(&mut self) {
+    // Implementation details...
+}
 
-## Implications for Project Wingman
+// Clears the conversation history while optionally preserving summaries
+pub fn clear(&mut self, preserve_summary: bool) {
+    // Implementation details...
+}
 
-For Project Wingman, this architecture means:
+// Adds new assistant responses to the history
+pub fn push_assistant_message(&mut self, message: AssistantMessage) {
+    // Implementation details...
+}
 
-1. **API Integration**: We'll extend the existing streaming clients rather than directly interacting with Bedrock APIs
-2. **Context Graph**: Our context graph system will need to integrate with the existing `ContextManager`
-3. **Tool Registry**: The MCP implementation and tool system will need to work with the conversation state management
-4. **Memory Management**: Our persistent memory features will build on top of the existing conversation state structure
+// Incorporates tool execution results into the conversation
+pub fn add_tool_results(&mut self, tool_results: Vec<ToolUseResult>) {
+    // Implementation details...
+}
+```
 
-The context graph system will be a significant extension, as the current system primarily manages file-based context rather than a structured knowledge graph.
+## Implications for Our Project Wingman Extensions
+
+Based on our analysis of the API integration and conversation memory systems, we've identified several key implications for our Project Wingman extensions:
+
+1. **API Integration**: We'll extend the existing streaming clients rather than directly interacting with Bedrock APIs. This ensures compatibility with the current architecture while adding our new capabilities.
+
+2. **Context Graph**: Our context graph system will integrate with the existing `ContextManager`, extending it to support structured knowledge representation beyond simple file-based context.
+
+3. **Tool Registry**: Our MCP-based tool registry will work with the conversation state management, ensuring tools can access and update the context graph.
+
+4. **Conversation History System**: We'll build our new persistent conversation history system on top of the existing conversation state structure, adding local storage capabilities while maintaining compatibility with the current memory management approach.
+
+By building on these existing systems rather than replacing them, we ensure our extensions integrate seamlessly with the Amazon Q CLI while adding powerful new capabilities.
