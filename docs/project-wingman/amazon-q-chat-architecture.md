@@ -1,19 +1,21 @@
 # Amazon Q Chat Architecture
 
-This document provides a detailed analysis of the Amazon Q CLI chat functionality, including code architecture, component interactions, and sequence diagrams.
+In this document, we dive deeper into the Amazon Q CLI chat functionality, examining its code architecture, component interactions, and sequence flows. This understanding will guide our Project Wingman extensions.
 
 ## Core Components
 
-The Amazon Q chat functionality is primarily implemented in the `q_chat` crate, with the following key components:
+The Amazon Q chat functionality is built around four primary components that work together to create the interactive experience:
 
-1. **ChatContext**: The central structure that manages the chat session
-2. **ConversationState**: Manages conversation history and context
-3. **Tool System**: Framework for executing tools requested by the model
-4. **StreamingClient**: Handles communication with the Amazon Bedrock API
+1. **ChatContext**: The central structure that orchestrates the entire chat session
+2. **ConversationState**: Manages our conversation history and context
+3. **Tool System**: Provides the framework for executing tools requested by the model
+4. **StreamingClient**: Handles our communication with the backend AI services
+
+These components form a cohesive system that allows us to interact with powerful AI models through a simple terminal interface.
 
 ## Code Architecture
 
-### Main Components and Their Relationships
+Understanding the code organization helps us navigate the codebase and identify where to implement our extensions.
 
 ```
 q_chat
@@ -37,7 +39,7 @@ q_chat
 
 #### ChatContext (lib.rs)
 
-The `ChatContext` struct is the central component that manages the chat session:
+The `ChatContext` struct serves as the conductor of our chat experience:
 
 ```rust
 pub struct ChatContext {
@@ -59,35 +61,41 @@ pub struct ChatContext {
 }
 ```
 
-Responsibilities:
-- Managing user input and output
-- Handling the conversation flow
-- Processing commands
-- Executing tools
+This structure handles:
+- Managing our user input and output
+- Controlling the conversation flow
+- Processing commands like `/context` and `/clear`
+- Coordinating tool execution
 - Communicating with the model via StreamingClient
+
+For our Project Wingman extensions, we'll need to extend this structure to handle our new tool registry and context graph features.
 
 #### ConversationState (conversation_state.rs)
 
-The `ConversationState` struct manages the conversation history and context:
+The `ConversationState` struct maintains the memory of our conversations:
 
 ```rust
 pub struct ConversationState {
     conversation_id: String,
-    history: Vec<ChatMessage>,
-    transcript: String,
-    tools: Vec<Tool>,
+    next_message: Option<UserMessage>,
+    history: VecDeque<(UserMessage, AssistantMessage)>,
+    valid_history_range: (usize, usize),
+    transcript: VecDeque<String>,
+    tools: HashMap<ToolOrigin, Vec<Tool>>,
     context_manager: Option<ContextManager>,
-    next_user_message: Option<String>,
-    current_profile: String,
-    output: Option<SharedWriter>,
+    context_message_length: Option<usize>,
+    latest_summary: Option<String>,
+    updates: Option<SharedWriter>,
 }
 ```
 
-Responsibilities:
-- Storing conversation history
-- Managing context files
-- Preparing conversation state for API requests
+This structure is responsible for:
+- Storing our conversation history
+- Managing context files through the ContextManager
+- Preparing the conversation state for API requests
 - Handling tool results
+
+Our context graph implementation will integrate closely with this structure to provide persistent memory across conversations.
 
 #### Tool System (tools/mod.rs)
 
@@ -100,18 +108,21 @@ pub enum Tool {
     ExecuteBash(ExecuteBash),
     UseAws(UseAws),
     GhIssue(GhIssue),
+    Custom(CustomTool),
 }
 ```
 
-Responsibilities:
-- Defining the interface for tools
-- Validating tool parameters
-- Executing tools
-- Formatting tool results
+This system:
+- Defines the interface for all tools
+- Validates tool parameters before execution
+- Executes tools and captures their output
+- Formats tool results for the model
+
+Our tool registry will extend this system to support dynamically loaded tools from YAML manifests.
 
 #### StreamingClient (fig_api_client/src/clients/streaming_client.rs)
 
-The `StreamingClient` handles communication with the Amazon Bedrock API:
+The `StreamingClient` handles our communication with the backend AI services:
 
 ```rust
 pub struct StreamingClient(inner::Inner);
@@ -123,19 +134,21 @@ enum Inner {
 }
 ```
 
-Responsibilities:
-- Sending conversation state to the model
-- Receiving streaming responses
-- Handling tool use events
-- Managing API errors
+This client:
+- Sends our conversation state to the model
+- Receives streaming responses
+- Handles tool use events
+- Manages API errors
 
-## Sequence Diagrams
+## Sequence Flows
+
+Understanding the flow of information through the system helps us identify integration points for our extensions.
 
 ### Chat Initialization Flow
 
 ```
 ┌──────────┐          ┌────────────┐          ┌─────────────────┐          ┌───────────────┐
-│ User/CLI │          │ ChatContext │          │ StreamingClient │          │ Bedrock Model │
+│ User/CLI │          │ ChatContext │          │ StreamingClient │          │ AI Model      │
 └────┬─────┘          └──────┬─────┘          └────────┬────────┘          └───────┬───────┘
      │                       │                         │                           │
      │ launch_chat()         │                         │                           │
@@ -168,7 +181,7 @@ Responsibilities:
 
 ```
 ┌──────────┐          ┌────────────┐          ┌─────────────────┐          ┌───────────────┐
-│ User/CLI │          │ ChatContext │          │ StreamingClient │          │ Bedrock Model │
+│ User/CLI │          │ ChatContext │          │ StreamingClient │          │ AI Model      │
 └────┬─────┘          └──────┬─────┘          └────────┬────────┘          └───────┬───────┘
      │                       │                         │                           │
      │ Enter prompt          │                         │                           │
@@ -210,7 +223,7 @@ Responsibilities:
 
 ```
 ┌──────────┐          ┌────────────┐          ┌─────────────────┐          ┌───────────────┐
-│ User/CLI │          │ ChatContext │          │ Tool System     │          │ Bedrock Model │
+│ User/CLI │          │ ChatContext │          │ Tool System     │          │ AI Model      │
 └────┬─────┘          └──────┬─────┘          └────────┬────────┘          └───────┬───────┘
      │                       │                         │                           │
      │                       │                         │                           │
@@ -257,7 +270,7 @@ Responsibilities:
 
 ## State Machine
 
-The chat functionality is implemented as a state machine with the following states:
+The chat functionality is implemented as a state machine that drives the conversation flow:
 
 ```rust
 enum ChatState {
@@ -285,42 +298,23 @@ enum ChatState {
 }
 ```
 
-This state machine drives the conversation flow, handling user input, model responses, and tool execution.
+This state machine handles:
+- Prompting the user for input
+- Processing user commands and messages
+- Validating and executing tools
+- Processing model responses
+- Managing conversation history
 
-## API Integration
+## Integration Points for Project Wingman
 
-Amazon Q CLI integrates with Amazon Bedrock through the following components:
+Based on our analysis of the Amazon Q chat architecture, we've identified several key integration points for our Project Wingman extensions:
 
-1. **StreamingClient**: Handles API communication
-2. **ConversationState**: Prepares the conversation for the API
-3. **ChatResponseStream**: Processes streaming responses from the API
+1. **Tool Registry**: We'll extend the `Tool` enum and the tool discovery mechanism to support our YAML manifest format.
 
-The API client automatically selects between:
-- `amzn-codewhisperer-streaming-client` for standard environments
-- `amzn-qdeveloper-streaming-client` for AWS CloudShell or when specified by environment variables
+2. **Context Graph**: We'll enhance the `ConversationState` and `ContextManager` to incorporate our persistent knowledge graph.
 
-## Context Management
+3. **Domain-Scoped Browsing**: We'll implement policy enforcement in the tool validation phase to ensure secure access to resources.
 
-The context management system allows for:
+4. **Conversation History**: We'll extend the `ConversationState` to persist conversations to our local storage system.
 
-1. **File Context**: Adding files to the conversation context
-2. **Profile Management**: Switching between different context profiles
-3. **Context Hooks**: Running commands to dynamically add context
-
-This system is implemented in the `context.rs` file and managed by the `ContextManager` class.
-
-## Tool System
-
-The tool system in Amazon Q CLI follows a plugin-like architecture:
-
-1. **Tool Enum**: Represents different tool types
-2. **Tool Implementations**: Individual tool functionality
-3. **Tool Specifications**: JSON schema for each tool
-4. **Tool Permissions**: Controls which tools require user approval
-
-Tools are executed through a standardized flow:
-1. Model requests a tool use
-2. Tool is validated
-3. User approves (if required)
-4. Tool is executed
-5. Results are sent back to the model
+By understanding the existing architecture, we can ensure our extensions integrate seamlessly with the Amazon Q CLI while adding powerful new capabilities.
